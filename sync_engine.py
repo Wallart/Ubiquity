@@ -100,7 +100,7 @@ class SyncEngine:
                         await self._send_move(event[1], event[2])
                 elif kind == 'deleted':
                     if self._mode == 'client':
-                        pass  # client deletions never propagate — server is source of truth
+                        await self._send_request(event[1])
                     else:
                         rel_path = event[1]
                         # Debounce: editors often delete+rename atomically (atomic write).
@@ -147,6 +147,11 @@ class SyncEngine:
             await self._transport.send(protocol.encode_move(old_path, new_path))
             log.info(f'Sent move: {old_path} → {new_path}')
 
+    async def _send_request(self, rel_path: str):
+        async with self._send_lock:
+            await self._transport.send(protocol.encode_request(rel_path))
+            log.info(f'Requested {rel_path} from server')
+
     async def _send_delete(self, rel_path: str):
         async with self._send_lock:
             await self._transport.send(protocol.encode_delete(rel_path))
@@ -190,6 +195,10 @@ class SyncEngine:
         elif msg_type == protocol.MSG_DELETE:
             rel_path = protocol.decode_delete(data)
             await self._apply_delete(rel_path)
+
+        elif msg_type == protocol.MSG_REQUEST:
+            rel_path = protocol.decode_request(data)
+            await self._send_file(rel_path)
 
     async def _finalise_receive(self):
         state = self._recv_state

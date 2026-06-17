@@ -15,6 +15,7 @@ MSG_CHUNK    = 0x02  # file data chunk
 MSG_END      = 0x03  # transfer complete
 MSG_MOVE     = 0x05  # file renamed/moved
 MSG_DELETE   = 0x06  # file deleted
+MSG_REQUEST  = 0x07  # client requests a file from server
 
 
 def file_checksum(path: str) -> str:
@@ -85,5 +86,14 @@ def encode_delete(path: str) -> bytes:
 
 
 def decode_delete(data: bytes) -> str:
+    _, payload = _unpack(data)
+    return payload.decode()
+
+
+def encode_request(path: str) -> bytes:
+    return _pack(MSG_REQUEST, path.encode())
+
+
+def decode_request(data: bytes) -> str:
     _, payload = _unpack(data)
     return payload.decode()
