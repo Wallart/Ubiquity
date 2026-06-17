@@ -50,11 +50,15 @@ class DiscoveryServer:
         self._stop.set()
 
     def _listen(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.settimeout(1.0)
-        sock.bind(('', DISCOVERY_PORT))
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.settimeout(1.0)
+            sock.bind(('', DISCOVERY_PORT))
+        except Exception:
+            log.exception('Discovery thread failed to start')
+            return
         reply = json.dumps({'magic': MAGIC_ANNOUNCE, 'port': self._tcp_port}).encode()
         log.info(f'Discovery listening on UDP port {DISCOVERY_PORT}')
         while not self._stop.is_set():
@@ -63,13 +67,13 @@ class DiscoveryServer:
                 msg = json.loads(data)
                 if msg.get('magic') == MAGIC_DISCOVER:
                     sock.sendto(reply, addr)
-                    log.debug(f'Discovery reply sent to {addr}')
+                    log.info(f'Discovery reply sent to {addr}')
             except socket.timeout:
                 continue
             except (json.JSONDecodeError, KeyError):
                 continue
-            except Exception as e:
-                log.debug(f'Discovery error: {e}')
+            except Exception:
+                log.exception('Discovery recv error')
         sock.close()
 
 
