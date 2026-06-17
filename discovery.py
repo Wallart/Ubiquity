@@ -85,11 +85,12 @@ class DiscoveryClient:
         log.info(f'Looking for Ubiquity server on local network (UDP {DISCOVERY_PORT})...')
         loop = asyncio.get_running_loop()
         protocol = _ListenerProtocol()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', DISCOVERY_PORT))
         transport, _ = await loop.create_datagram_endpoint(
             lambda: protocol,
-            local_addr=('0.0.0.0', DISCOVERY_PORT),
-            family=socket.AF_INET,
-            reuse_address=True,
+            sock=sock,
         )
         try:
             deadline = loop.time() + timeout
