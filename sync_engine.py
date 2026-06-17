@@ -169,7 +169,6 @@ class SyncEngine:
             await self._transport.send(
                 protocol.encode_announce(rel_path, stat.st_size, stat.st_ino, stat.st_mtime, checksum)
             )
-            await asyncio.sleep(INTER_PACKET_DELAY)
 
             if stat.st_size > 0:
                 with open(abs_path, 'rb') as f:
@@ -222,15 +221,15 @@ class SyncEngine:
                 idx, chunk_data = protocol.decode_chunk(data)
                 self._recv_state.add_chunk(idx, chunk_data)
                 if self._recv_state.is_complete():
-                    self._recv_state.close()
-                    await self._finalise_receive()
-                    self._recv_state = None
+                    state, self._recv_state = self._recv_state, None
+                    state.close()
+                    await self._finalise_receive(state)
 
         elif msg_type == protocol.MSG_END:
             if self._recv_state:
-                self._recv_state.close()
-                await self._finalise_receive()
-                self._recv_state = None
+                state, self._recv_state = self._recv_state, None
+                state.close()
+                await self._finalise_receive(state)
 
         elif msg_type == protocol.MSG_MOVE:
             old_path, new_path = protocol.decode_move(data)
@@ -244,8 +243,7 @@ class SyncEngine:
             rel_path = protocol.decode_request(data)
             await self._send_file(rel_path)
 
-    async def _finalise_receive(self):
-        state = self._recv_state
+    async def _finalise_receive(self, state: '_ReceiveState'):
         meta = state.meta
         rel_path = meta['path']
         abs_path = self._watch_dir / rel_path
