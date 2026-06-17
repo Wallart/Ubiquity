@@ -98,8 +98,8 @@ class DiscoveryServer:
 
 
 class DiscoveryClient:
-    async def find(self, timeout: float = 30.0) -> tuple:
-        log.info(f'Broadcasting discovery on UDP port {DISCOVERY_PORT}...')
+    async def find(self) -> tuple:
+        log.info(f'Broadcasting discovery on UDP port {DISCOVERY_PORT} (waiting for server)...')
         loop = asyncio.get_running_loop()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -108,16 +108,12 @@ class DiscoveryClient:
             sock=sock,
         )
         try:
-            deadline = loop.time() + timeout
             while True:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise TimeoutError(f'No Ubiquity server found after {timeout}s')
                 protocol.broadcast()
                 try:
                     data, addr = await asyncio.wait_for(
                         protocol.queue.get(),
-                        timeout=min(remaining, BROADCAST_INTERVAL),
+                        timeout=BROADCAST_INTERVAL,
                     )
                     msg = json.loads(data)
                     if msg.get('magic') == MAGIC_ANNOUNCE:
