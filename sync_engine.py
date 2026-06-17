@@ -58,30 +58,51 @@ class SyncEngine:
         self._loop = loop
         watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue)
 
+        watcher.start()
+        log.info(f'Sync engine running in {self._mode} mode for {self._watch_dir}')
+
         if self._mode == 'server':
             self._transport = TCPServer(self._on_receive, self._port, on_connect=self._send_all_files)
             await self._transport.start()
             self._discovery = DiscoveryServer(self._port)
             self._discovery.start()
-        else:
-            if self._peer_name is None:
-                from discovery import DiscoveryClient
-                self._peer_name, self._port = await DiscoveryClient().find()
-            self._transport = TCPClient(self._peer_name, self._port, self._on_receive)
-            await self._transport.connect()
-
-        watcher.start()
-        log.info(f'Sync engine running in {self._mode} mode for {self._watch_dir}')
-
-        try:
-            await self._process_fs_events()
-        finally:
-            watcher.stop()
-            if self._mode == 'server':
+            try:
+                await self._process_fs_events()
+            finally:
                 self._discovery.stop()
                 await self._transport.stop()
-            else:
+                watcher.stop()
+        else:
+            self._transport = TCPClient(self._on_receive)
+            try:
+                await self._client_loop()
+            finally:
                 await self._transport.disconnect()
+                watcher.stop()
+
+    async def _client_loop(self):
+        from discovery import DiscoveryClient
+        use_discovery = self._peer_name is None
+        while True:
+            if use_discovery:
+                host, port = await DiscoveryClient().find()
+            else:
+                host, port = self._peer_name, self._port
+            try:
+                await self._transport.connect(host, port)
+            except OSError as e:
+                log.warning(f'Connection failed ({e}), retrying in 5s...')
+                await asyncio.sleep(5.0)
+                continue
+
+            fs_task = asyncio.ensure_future(self._process_fs_events())
+            await self._transport.wait_disconnected()
+            fs_task.cancel()
+            try:
+                await fs_task
+            except asyncio.CancelledError:
+                pass
+            log.info('Server lost — restarting discovery...')
 
     # ------------------------------------------------------------------ #
     # Outbound: local changes → BLE                                        #

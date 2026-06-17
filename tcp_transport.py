@@ -64,20 +64,24 @@ class TCPServer:
 
 
 class TCPClient:
-    def __init__(self, host: str, port: int = TCP_PORT, on_receive: OnReceive = None):
-        self._host = host
-        self._port = port
+    def __init__(self, on_receive: OnReceive):
         self._on_receive = on_receive
         self._writer: Optional[asyncio.StreamWriter] = None
         self._connected = asyncio.Event()
+        self._disconnected = asyncio.Event()
         self._send_lock = asyncio.Lock()
+        self._host = None
+        self._port = None
 
-    async def connect(self):
-        log.info(f'Connecting to {self._host}:{self._port}...')
-        reader, writer = await asyncio.open_connection(self._host, self._port)
+    async def connect(self, host: str, port: int):
+        self._host = host
+        self._port = port
+        self._disconnected.clear()
+        log.info(f'Connecting to {host}:{port}...')
+        reader, writer = await asyncio.open_connection(host, port)
         self._writer = writer
         self._connected.set()
-        log.info(f'Connected to {self._host}:{self._port}')
+        log.info(f'Connected to {host}:{port}')
         asyncio.ensure_future(self._read_loop(reader))
 
     async def disconnect(self):
@@ -87,6 +91,9 @@ class TCPClient:
                 await self._writer.wait_closed()
             except Exception:
                 pass
+
+    async def wait_disconnected(self):
+        await self._disconnected.wait()
 
     async def send(self, data: bytes):
         await self._connected.wait()
@@ -101,6 +108,7 @@ class TCPClient:
                 length = (header[1] << 8) | header[2]
                 payload = await reader.readexactly(length)
                 self._on_receive(header + payload)
-        except (asyncio.IncompleteReadError, ConnectionResetError):
+        except (asyncio.IncompleteReadError, ConnectionResetError, OSError):
             log.warning(f'Disconnected from {self._host}:{self._port}')
             self._connected.clear()
+            self._disconnected.set()
