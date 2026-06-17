@@ -39,10 +39,11 @@ class _ReceiveState:
 
 
 class SyncEngine:
-    def __init__(self, watch_dir: str, mode: str, peer_name: str = BLE_DEVICE_NAME):
+    def __init__(self, watch_dir: str, mode: str, peer_name: str = '127.0.0.1', port: int = 5000):
         self._watch_dir = Path(watch_dir).resolve()
-        self._mode = mode  # 'server' or 'client'
+        self._mode = mode
         self._peer_name = peer_name
+        self._port = port
         self._fs_queue: asyncio.Queue = asyncio.Queue()
         self._recv_state: Optional[_ReceiveState] = None
         self._transport = None
@@ -56,10 +57,10 @@ class SyncEngine:
         watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue)
 
         if self._mode == 'server':
-            self._transport = TCPServer(self._on_receive)
+            self._transport = TCPServer(self._on_receive, self._port)
             await self._transport.start()
         else:
-            self._transport = TCPClient(self._peer_name, self._on_receive)
+            self._transport = TCPClient(self._peer_name, self._port, self._on_receive)
             await self._transport.connect()
 
         watcher.start()

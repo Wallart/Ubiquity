@@ -30,6 +30,10 @@ async def async_main():
         '--peer', default='127.0.0.1',
         help='IP address or hostname of the server (default: 127.0.0.1)',
     )
+    parser.add_argument(
+        '--port', type=int, default=5000,
+        help='TCP port to listen on (server) or connect to (client) (default: 5000)',
+    )
     args = parser.parse_args()
 
     watch_dir = Path(args.dir)
@@ -37,7 +41,7 @@ async def async_main():
         print(f'Error: {watch_dir} is not a directory', file=sys.stderr)
         sys.exit(1)
 
-    engine = SyncEngine(str(watch_dir), args.mode, args.peer)
+    engine = SyncEngine(str(watch_dir), args.mode, args.peer, args.port)
     await engine.run()
 
 

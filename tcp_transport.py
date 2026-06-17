@@ -15,17 +15,18 @@ OnReceive = Callable[[bytes], None]
 
 
 class TCPServer:
-    def __init__(self, on_receive: OnReceive):
+    def __init__(self, on_receive: OnReceive, port: int = TCP_PORT):
         self._on_receive = on_receive
+        self._port = port
         self._server = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._send_lock = asyncio.Lock()
 
     async def start(self):
         self._server = await asyncio.start_server(
-            self._handle_client, '0.0.0.0', TCP_PORT
+            self._handle_client, '0.0.0.0', self._port
         )
-        log.info(f'TCP server listening on 0.0.0.0:{TCP_PORT}')
+        log.info(f'TCP server listening on 0.0.0.0:{self._port}')
 
     async def stop(self):
         if self._server:
@@ -60,19 +61,20 @@ class TCPServer:
 
 
 class TCPClient:
-    def __init__(self, host: str, on_receive: OnReceive):
+    def __init__(self, host: str, port: int = TCP_PORT, on_receive: OnReceive = None):
         self._host = host
+        self._port = port
         self._on_receive = on_receive
         self._writer: Optional[asyncio.StreamWriter] = None
         self._connected = asyncio.Event()
         self._send_lock = asyncio.Lock()
 
     async def connect(self):
-        log.info(f'Connecting to {self._host}:{TCP_PORT}...')
-        reader, writer = await asyncio.open_connection(self._host, TCP_PORT)
+        log.info(f'Connecting to {self._host}:{self._port}...')
+        reader, writer = await asyncio.open_connection(self._host, self._port)
         self._writer = writer
         self._connected.set()
-        log.info(f'Connected to {self._host}:{TCP_PORT}')
+        log.info(f'Connected to {self._host}:{self._port}')
         asyncio.ensure_future(self._read_loop(reader))
 
     async def disconnect(self):
@@ -97,5 +99,5 @@ class TCPClient:
                 payload = await reader.readexactly(length)
                 self._on_receive(header + payload)
         except (asyncio.IncompleteReadError, ConnectionResetError):
-            log.warning(f'Disconnected from {self._host}')
+            log.warning(f'Disconnected from {self._host}:{self._port}')
             self._connected.clear()
