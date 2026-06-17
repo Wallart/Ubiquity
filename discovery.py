@@ -17,6 +17,24 @@ MAGIC_DISCOVER = 'ubiquity-discover-v1'
 MAGIC_ANNOUNCE = 'ubiquity-announce-v1'
 
 
+def _broadcast_addresses() -> list:
+    """Return all candidate broadcast addresses for the local machine."""
+    addrs = ['255.255.255.255']
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith('127.'):
+                parts = ip.split('.')
+                parts[3] = '255'
+                subnet_bcast = '.'.join(parts)
+                if subnet_bcast not in addrs:
+                    addrs.append(subnet_bcast)
+    except Exception:
+        pass
+    return addrs
+
+
 class _ServerListenerProtocol(asyncio.DatagramProtocol):
     def __init__(self, tcp_port: int):
         self._tcp_port = tcp_port
@@ -55,10 +73,11 @@ class _ClientProtocol(asyncio.DatagramProtocol):
 
     def broadcast(self):
         payload = json.dumps({'magic': MAGIC_DISCOVER}).encode()
-        try:
-            self._transport.sendto(payload, ('255.255.255.255', DISCOVERY_PORT))
-        except Exception as e:
-            log.debug(f'Broadcast error: {e}')
+        for addr in _broadcast_addresses():
+            try:
+                self._transport.sendto(payload, (addr, DISCOVERY_PORT))
+            except Exception as e:
+                log.debug(f'Broadcast to {addr} error: {e}')
 
     def error_received(self, exc):
         log.debug(f'Discovery client error: {exc}')
