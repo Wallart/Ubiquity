@@ -32,7 +32,7 @@ class _ReceiveState:
         self.chunks: dict[int, bytes] = {}
         self.pbar = (
             tqdm(total=meta['size'], unit='B', unit_scale=True,
-                 desc=f'↓ {meta["path"]}', leave=False)
+                 desc=f'↓ {meta["path"]}', leave=True)
             if meta['size'] > 0 else None
         )
 
@@ -176,7 +176,7 @@ class SyncEngine:
             if stat.st_size > 0:
                 with open(abs_path, 'rb') as f:
                     with tqdm(total=stat.st_size, unit='B', unit_scale=True,
-                              desc=f'↑ {rel_path}', leave=False) as pbar:
+                              desc=f'↑ {rel_path}', leave=True) as pbar:
                         idx = 0
                         while chunk := f.read(protocol.CHUNK_PAYLOAD_SIZE):
                             await self._transport.send(protocol.encode_chunk(idx, chunk))
