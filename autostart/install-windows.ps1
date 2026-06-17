@@ -33,6 +33,11 @@ Register-ScheduledTask `
     -RunLevel Highest `
     -Force
 
+Write-Host "Opening firewall for UDP discovery (port 5999)..."
+New-NetFirewallRule -DisplayName "UbiquitySync Discovery" `
+    -Direction Inbound -Protocol UDP -LocalPort 5999 -Action Allow `
+    -ErrorAction SilentlyContinue | Out-Null
+
 Write-Host "Installed. Starting now..."
 Start-ScheduledTask -TaskName "UbiquitySync"
 Write-Host "Done. To remove: Unregister-ScheduledTask -TaskName UbiquitySync"
