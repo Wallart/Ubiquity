@@ -8,7 +8,7 @@ import json
 import struct
 from typing import Tuple
 
-CHUNK_PAYLOAD_SIZE = 65000  # large chunks for TCP throughput
+CHUNK_PAYLOAD_SIZE = 32768  # 32KB — stays under asyncio's 64KB StreamReader buffer
 
 MSG_ANNOUNCE = 0x01  # start of file transfer
 MSG_CHUNK    = 0x02  # file data chunk

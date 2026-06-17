@@ -180,6 +180,7 @@ class SyncEngine:
                             await self._transport.send(protocol.encode_chunk(idx, chunk))
                             pbar.update(len(chunk))
                             idx += 1
+                            await asyncio.sleep(0)  # yield to event loop between chunks
 
             await self._transport.send(protocol.encode_end(checksum))
             log.info(f'Sent {rel_path}')
