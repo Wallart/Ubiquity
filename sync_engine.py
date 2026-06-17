@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from tqdm import tqdm
+
 import protocol
 from discovery import DiscoveryServer
 from tcp_transport import TCPClient, TCPServer
@@ -28,9 +30,20 @@ class _ReceiveState:
     def __init__(self, meta: dict):
         self.meta = meta
         self.chunks: dict[int, bytes] = {}
+        self.pbar = (
+            tqdm(total=meta['size'], unit='B', unit_scale=True,
+                 desc=f'↓ {meta["path"]}', leave=False)
+            if meta['size'] > 0 else None
+        )
 
     def add_chunk(self, idx: int, data: bytes):
         self.chunks[idx] = data
+        if self.pbar:
+            self.pbar.update(len(data))
+
+    def close(self):
+        if self.pbar:
+            self.pbar.close()
 
     def is_complete(self) -> bool:
         return len(self.chunks) == self.meta['total_chunks']
@@ -162,11 +175,14 @@ class SyncEngine:
 
             if stat.st_size > 0:
                 with open(abs_path, 'rb') as f:
-                    idx = 0
-                    while chunk := f.read(protocol.CHUNK_PAYLOAD_SIZE):
-                        await self._transport.send(protocol.encode_chunk(idx, chunk))
-                        await asyncio.sleep(INTER_PACKET_DELAY)
-                        idx += 1
+                    with tqdm(total=stat.st_size, unit='B', unit_scale=True,
+                              desc=f'↑ {rel_path}', leave=False) as pbar:
+                        idx = 0
+                        while chunk := f.read(protocol.CHUNK_PAYLOAD_SIZE):
+                            await self._transport.send(protocol.encode_chunk(idx, chunk))
+                            pbar.update(len(chunk))
+                            await asyncio.sleep(INTER_PACKET_DELAY)
+                            idx += 1
 
             await self._transport.send(protocol.encode_end(checksum))
             log.info(f'Sent {rel_path}')
@@ -208,12 +224,13 @@ class SyncEngine:
                 idx, chunk_data = protocol.decode_chunk(data)
                 self._recv_state.add_chunk(idx, chunk_data)
                 if self._recv_state.is_complete():
+                    self._recv_state.close()
                     await self._finalise_receive()
                     self._recv_state = None
 
         elif msg_type == protocol.MSG_END:
-            # Safety net: finalise even if chunk counter diverged.
             if self._recv_state:
+                self._recv_state.close()
                 await self._finalise_receive()
                 self._recv_state = None
 
@@ -239,7 +256,7 @@ class SyncEngine:
         if abs_path.exists():
             local_mtime = abs_path.stat().st_mtime
             if local_mtime > meta['mtime']:
-                log.info(f'Skipping {rel_path}: local file is newer ({local_mtime:.1f} > {meta["mtime"]:.1f})')
+                log.info(f'Skipping {rel_path}: local file is newer')
                 return
 
         content = state.assemble()
