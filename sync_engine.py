@@ -20,8 +20,6 @@ from watcher import FileWatcher
 log = logging.getLogger(__name__)
 
 BLE_DEVICE_NAME = 'UbiquitySync'
-# Delay between BLE packets to avoid overwhelming the receiver (seconds).
-INTER_PACKET_DELAY = 0.02
 
 
 class _ReceiveState:
@@ -181,7 +179,6 @@ class SyncEngine:
                         while chunk := f.read(protocol.CHUNK_PAYLOAD_SIZE):
                             await self._transport.send(protocol.encode_chunk(idx, chunk))
                             pbar.update(len(chunk))
-                            await asyncio.sleep(INTER_PACKET_DELAY)
                             idx += 1
 
             await self._transport.send(protocol.encode_end(checksum))

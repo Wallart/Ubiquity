@@ -8,7 +8,7 @@ import json
 import struct
 from typing import Tuple
 
-CHUNK_PAYLOAD_SIZE = 490  # safe size within 512-byte BLE MTU
+CHUNK_PAYLOAD_SIZE = 65000  # large chunks for TCP throughput
 
 MSG_ANNOUNCE = 0x01  # start of file transfer
 MSG_CHUNK    = 0x02  # file data chunk
