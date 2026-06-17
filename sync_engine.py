@@ -57,7 +57,7 @@ class SyncEngine:
         watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue)
 
         if self._mode == 'server':
-            self._transport = TCPServer(self._on_receive, self._port)
+            self._transport = TCPServer(self._on_receive, self._port, on_connect=self._send_all_files)
             await self._transport.start()
         else:
             self._transport = TCPClient(self._peer_name, self._port, self._on_receive)
@@ -79,6 +79,13 @@ class SyncEngine:
     # Outbound: local changes → BLE                                        #
     # ------------------------------------------------------------------ #
 
+    async def _send_all_files(self):
+        log.info('Client connected — sending initial file list')
+        for abs_path in sorted(self._watch_dir.rglob('*')):
+            if abs_path.is_file():
+                rel = str(abs_path.relative_to(self._watch_dir))
+                await self._send_file(rel)
+
     async def _process_fs_events(self):
         while True:
             event = await self._fs_queue.get()
@@ -91,7 +98,13 @@ class SyncEngine:
                 elif kind == 'moved':
                     await self._send_move(event[1], event[2])
                 elif kind == 'deleted':
-                    await self._send_delete(event[1])
+                    rel_path = event[1]
+                    # Debounce: editors often delete+rename atomically (atomic write).
+                    await asyncio.sleep(0.3)
+                    if (self._watch_dir / rel_path).is_file():
+                        await self._send_file(rel_path)
+                    else:
+                        await self._send_delete(rel_path)
             except Exception:
                 log.exception(f'Error handling FS event {event}')
 

@@ -15,9 +15,10 @@ OnReceive = Callable[[bytes], None]
 
 
 class TCPServer:
-    def __init__(self, on_receive: OnReceive, port: int = TCP_PORT):
+    def __init__(self, on_receive: OnReceive, port: int = TCP_PORT, on_connect=None):
         self._on_receive = on_receive
         self._port = port
+        self._on_connect = on_connect
         self._server = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._send_lock = asyncio.Lock()
@@ -44,6 +45,8 @@ class TCPServer:
         addr = writer.get_extra_info('peername')
         log.info(f'Client connected from {addr}')
         self._writer = writer
+        if self._on_connect:
+            await self._on_connect()
         try:
             await self._read_loop(reader)
         except (asyncio.IncompleteReadError, ConnectionResetError):
