@@ -1,8 +1,8 @@
 """
-Ubiquity — BLE bidirectional file sync
+Ubiquity — TCP bidirectional file sync
 Usage:
-  Server PC (advertises):  python main.py --mode server --dir /path/to/folder
-  Client PC (connects):    python main.py --mode client --dir /path/to/folder [--peer UbiquitySync]
+  Server (macOS):   python main.py --mode server --dir /path/to/folder
+  Client (Windows): python main.py --mode client --dir C:\path\to\folder --peer <server-ip>
 """
 import argparse
 import asyncio
@@ -10,7 +10,7 @@ import logging
 import sys
 from pathlib import Path
 
-from sync_engine import BLE_DEVICE_NAME, SyncEngine
+from sync_engine import SyncEngine
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,8 +27,8 @@ async def async_main():
     )
     parser.add_argument('--dir', required=True, help='Local directory to watch and sync')
     parser.add_argument(
-        '--peer', default=BLE_DEVICE_NAME,
-        help=f'BLE device name of the server (default: {BLE_DEVICE_NAME})',
+        '--peer', default='127.0.0.1',
+        help='IP address or hostname of the server (default: 127.0.0.1)',
     )
     args = parser.parse_args()
 

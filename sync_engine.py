@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import protocol
-from ble_transport import BLEClient, BLEServer
+from tcp_transport import TCPClient, TCPServer
 from watcher import FileWatcher
 
 log = logging.getLogger(__name__)
@@ -56,10 +56,10 @@ class SyncEngine:
         watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue)
 
         if self._mode == 'server':
-            self._transport = BLEServer(BLE_DEVICE_NAME, self._on_receive)
+            self._transport = TCPServer(self._on_receive)
             await self._transport.start()
         else:
-            self._transport = BLEClient(self._peer_name, self._on_receive)
+            self._transport = TCPClient(self._peer_name, self._on_receive)
             await self._transport.connect()
 
         watcher.start()
@@ -139,10 +139,7 @@ class SyncEngine:
     # ------------------------------------------------------------------ #
 
     def _on_receive(self, data: bytes):
-        """BLE callback — may be called from a non-async context."""
-        self._loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self._handle_message(data))
-        )
+        asyncio.ensure_future(self._handle_message(data))
 
     async def _handle_message(self, data: bytes):
         if not data:
