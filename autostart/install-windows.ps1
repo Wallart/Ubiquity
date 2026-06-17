@@ -1,13 +1,12 @@
 # Ubiquity — Windows auto-start setup (Task Scheduler)
 # Run once as the user who should run the sync (no admin required).
+# The server is discovered automatically via UDP broadcast.
 #
 # Usage:
-#   .\install-windows.ps1 -Dir C:\your\folder -Peer 192.168.1.x -Port 5001
+#   .\install-windows.ps1 -Dir C:\your\folder
 
 param(
-    [Parameter(Mandatory)][string]$Dir,
-    [Parameter(Mandatory)][string]$Peer,
-    [int]$Port = 5001
+    [Parameter(Mandatory)][string]$Dir
 )
 
 $python  = (Get-Command python).Source
@@ -17,7 +16,7 @@ $workdir = Split-Path $script
 
 $action = New-ScheduledTaskAction `
     -Execute $python `
-    -Argument "`"$script`" --mode client --dir `"$Dir`" --peer $Peer --port $Port" `
+    -Argument "`"$script`" --mode client --dir `"$Dir`"" `
     -WorkingDirectory $workdir
 
 $trigger  = New-ScheduledTaskTrigger -AtLogon -User $env:USERNAME

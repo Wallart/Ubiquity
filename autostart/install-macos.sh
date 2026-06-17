@@ -1,9 +1,10 @@
 #!/bin/bash
 # Ubiquity — macOS auto-start setup (launchd)
 # Run once as the user who should run the sync.
+# Clients auto-discover this server via UDP broadcast on port 5999.
 #
 # Usage:
-#   ./install-macos.sh --dir /your/folder --port 5001
+#   ./install-macos.sh --dir /your/folder [--port 5001]
 
 set -e
 
