@@ -1,6 +1,8 @@
 """
-UDP broadcast discovery.
-Server announces itself periodically; client listens and auto-connects.
+UDP discovery — client-initiated to avoid Windows firewall issues.
+
+Client broadcasts "who's there?" → server replies unicast → client connects.
+Only outbound UDP is needed on the client (always allowed by Windows Firewall).
 """
 import asyncio
 import json
@@ -11,39 +13,55 @@ log = logging.getLogger(__name__)
 
 DISCOVERY_PORT = 5999
 BROADCAST_INTERVAL = 2.0
-DISCOVERY_MAGIC = 'ubiquity-sync-v1'
+MAGIC_DISCOVER = 'ubiquity-discover-v1'
+MAGIC_ANNOUNCE = 'ubiquity-announce-v1'
 
 
-class _BroadcastProtocol(asyncio.DatagramProtocol):
-    def __init__(self, payload: bytes):
-        self._payload = payload
+class _ServerListenerProtocol(asyncio.DatagramProtocol):
+    def __init__(self, tcp_port: int):
+        self._tcp_port = tcp_port
         self._transport = None
 
     def connection_made(self, transport):
         self._transport = transport
 
-    def send(self):
+    def datagram_received(self, data: bytes, addr):
         try:
-            self._transport.sendto(self._payload, ('255.255.255.255', DISCOVERY_PORT))
-        except Exception as e:
-            log.debug(f'Broadcast send error: {e}')
+            msg = json.loads(data)
+            if msg.get('magic') == MAGIC_DISCOVER:
+                response = json.dumps({'magic': MAGIC_ANNOUNCE, 'port': self._tcp_port}).encode()
+                self._transport.sendto(response, addr)
+                log.debug(f'Discovery reply sent to {addr}')
+        except (json.JSONDecodeError, KeyError):
+            pass
 
     def error_received(self, exc):
-        log.debug(f'Broadcast protocol error: {exc}')
+        log.debug(f'Discovery listener error: {exc}')
 
     def connection_lost(self, exc):
         pass
 
 
-class _ListenerProtocol(asyncio.DatagramProtocol):
+class _ClientProtocol(asyncio.DatagramProtocol):
     def __init__(self):
         self.queue: asyncio.Queue = asyncio.Queue()
+        self._transport = None
+
+    def connection_made(self, transport):
+        self._transport = transport
 
     def datagram_received(self, data: bytes, addr):
         self.queue.put_nowait((data, addr))
 
+    def broadcast(self):
+        payload = json.dumps({'magic': MAGIC_DISCOVER}).encode()
+        try:
+            self._transport.sendto(payload, ('255.255.255.255', DISCOVERY_PORT))
+        except Exception as e:
+            log.debug(f'Broadcast error: {e}')
+
     def error_received(self, exc):
-        log.debug(f'Listener protocol error: {exc}')
+        log.debug(f'Discovery client error: {exc}')
 
     def connection_lost(self, exc):
         pass
@@ -55,25 +73,24 @@ class DiscoveryServer:
         self._task = None
 
     def start(self):
-        self._task = asyncio.ensure_future(self._broadcast_loop())
+        self._task = asyncio.ensure_future(self._listen())
 
     def stop(self):
         if self._task:
             self._task.cancel()
 
-    async def _broadcast_loop(self):
-        payload = json.dumps({'magic': DISCOVERY_MAGIC, 'port': self._tcp_port}).encode()
+    async def _listen(self):
         loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-            lambda: _BroadcastProtocol(payload),
-            family=socket.AF_INET,
-            allow_broadcast=True,
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', DISCOVERY_PORT))
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _ServerListenerProtocol(self._tcp_port),
+            sock=sock,
         )
-        log.info(f'Broadcasting presence on UDP port {DISCOVERY_PORT}')
+        log.info(f'Discovery listening on UDP port {DISCOVERY_PORT}')
         try:
-            while True:
-                protocol.send()
-                await asyncio.sleep(BROADCAST_INTERVAL)
+            await asyncio.Future()  # run forever
         except asyncio.CancelledError:
             pass
         finally:
@@ -82,14 +99,12 @@ class DiscoveryServer:
 
 class DiscoveryClient:
     async def find(self, timeout: float = 30.0) -> tuple:
-        log.info(f'Looking for Ubiquity server on local network (UDP {DISCOVERY_PORT})...')
+        log.info(f'Broadcasting discovery on UDP port {DISCOVERY_PORT}...')
         loop = asyncio.get_running_loop()
-        protocol = _ListenerProtocol()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', DISCOVERY_PORT))
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: protocol,
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        transport, protocol = await loop.create_datagram_endpoint(
+            _ClientProtocol,
             sock=sock,
         )
         try:
@@ -98,13 +113,14 @@ class DiscoveryClient:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     raise TimeoutError(f'No Ubiquity server found after {timeout}s')
+                protocol.broadcast()
                 try:
                     data, addr = await asyncio.wait_for(
                         protocol.queue.get(),
-                        timeout=min(remaining, 1.0),
+                        timeout=min(remaining, BROADCAST_INTERVAL),
                     )
                     msg = json.loads(data)
-                    if msg.get('magic') == DISCOVERY_MAGIC:
+                    if msg.get('magic') == MAGIC_ANNOUNCE:
                         host, port = addr[0], msg['port']
                         log.info(f'Found server at {host}:{port}')
                         return host, port
