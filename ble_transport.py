@@ -99,12 +99,25 @@ class BLEClient:
         if device is None:
             raise RuntimeError(f'BLE device "{self._peer_name}" not found after {timeout}s')
 
+        for attempt in range(5):
+            try:
+                await self._try_connect(device)
+                return
+            except OSError as e:
+                log.warning(f'Connection attempt {attempt + 1}/5 failed ({e}), reconnecting...')
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
+                await asyncio.sleep(3.0)
+        raise RuntimeError(f'Could not establish stable BLE connection after 5 attempts')
+
+    async def _try_connect(self, device):
         self._client = BleakClient(device, disconnected_callback=self._on_disconnect)
         await self._client.connect()
-        # Wait for bless/CoreBluetooth to finish committing its GATT table —
-        # without this, Windows receives a services-changed event mid-subscription
-        # and closes the connection.
-        await asyncio.sleep(3.0)
+        # bless/CoreBluetooth fires one or more services-changed events after connection
+        # which invalidates the WinRT GATT objects on Windows. Wait for them to settle.
+        await asyncio.sleep(6.0)
 
         s2c_char = next(
             (c for s in self._client.services
@@ -116,15 +129,7 @@ class BLEClient:
             available = [c.uuid for s in self._client.services for c in s.characteristics]
             raise RuntimeError(f'S2C characteristic not found. Available: {available}')
 
-        for attempt in range(5):
-            try:
-                await self._client.start_notify(s2c_char.uuid, self._on_notify)
-                break
-            except OSError:
-                if attempt == 4:
-                    raise
-                log.warning(f'start_notify failed (attempt {attempt + 1}/5), retrying...')
-                await asyncio.sleep(1.0)
+        await self._client.start_notify(s2c_char.uuid, self._on_notify)
         self._connected.set()
         log.info(f'Connected to "{self._peer_name}"')
 
