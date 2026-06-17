@@ -106,9 +106,6 @@ class BLEClient:
         # and closes the connection.
         await asyncio.sleep(3.0)
 
-        # Re-discover services after the services-changed event has settled.
-        await self._client.get_services()
-
         s2c_char = next(
             (c for s in self._client.services
                for c in s.characteristics
