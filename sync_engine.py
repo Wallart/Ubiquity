@@ -1,5 +1,5 @@
 """
-Sync engine: ties together the file watcher and BLE transport.
+Sync engine: ties together the file watcher and TCP transport.
 
 Conflict resolution: last-write-wins based on mtime.
 Echo prevention: files written locally are ignored by the watcher for 1 second.
@@ -18,8 +18,6 @@ from tcp_transport import TCPClient, TCPServer
 from watcher import FileWatcher
 
 log = logging.getLogger(__name__)
-
-BLE_DEVICE_NAME = 'UbiquitySync'
 
 
 class _ReceiveState:
@@ -51,7 +49,8 @@ class _ReceiveState:
 
 
 class SyncEngine:
-    def __init__(self, watch_dir: str, mode: str, peer_name: str = None, port: int = 5000):
+    def __init__(self, watch_dir: str, mode: str, peer_name: str = None, port: int = 5000,
+                 on_status=None, on_transfer=None):
         self._watch_dir = Path(watch_dir).resolve()
         self._mode = mode
         self._peer_name = peer_name
@@ -61,8 +60,10 @@ class SyncEngine:
         self._recv_state: Optional[_ReceiveState] = None
         self._transport = None
         self._send_lock = asyncio.Lock()
-        # Relative paths of files we wrote ourselves — suppressed in watcher.
         self._local_writes: set[str] = set()
+        # GUI callbacks — called from the asyncio thread, must be thread-safe.
+        self._on_status = on_status or (lambda status, peer='': None)
+        self._on_transfer = on_transfer or (lambda name, pct, done=False: None)
 
     async def run(self):
         loop = asyncio.get_running_loop()
@@ -73,10 +74,15 @@ class SyncEngine:
         log.info(f'Sync engine running in {self._mode} mode for {self._watch_dir}')
 
         if self._mode == 'server':
-            self._transport = TCPServer(self._on_receive, self._port, on_connect=self._send_all_files)
+            self._transport = TCPServer(
+                self._on_receive, self._port,
+                on_connect=self._on_client_connected,
+                on_disconnect=lambda: self._on_status('searching'),
+            )
             await self._transport.start()
             self._discovery = DiscoveryServer(self._port)
             self._discovery.start()
+            self._on_status('searching')
             try:
                 await self._process_fs_events()
             finally:
@@ -91,10 +97,16 @@ class SyncEngine:
                 await self._transport.disconnect()
                 watcher.stop()
 
+    async def _on_client_connected(self):
+        addr = self._transport.peer_addr()
+        self._on_status('connected', addr)
+        await self._send_all_files()
+
     async def _client_loop(self):
         from discovery import DiscoveryClient
         use_discovery = self._peer_name is None
         while True:
+            self._on_status('searching')
             if use_discovery:
                 host, port = await DiscoveryClient().find()
             else:
@@ -106,6 +118,7 @@ class SyncEngine:
                 await asyncio.sleep(5.0)
                 continue
 
+            self._on_status('connected', host)
             fs_task = asyncio.ensure_future(self._process_fs_events())
             await self._transport.wait_disconnected()
             fs_task.cancel()
@@ -116,7 +129,7 @@ class SyncEngine:
             log.info('Server lost — restarting discovery...')
 
     # ------------------------------------------------------------------ #
-    # Outbound: local changes → BLE                                        #
+    # Outbound: local changes → TCP                                        #
     # ------------------------------------------------------------------ #
 
     async def _send_all_files(self):
@@ -171,17 +184,21 @@ class SyncEngine:
             )
 
             if stat.st_size > 0:
+                sent = 0
                 with open(abs_path, 'rb') as f:
                     with tqdm(total=stat.st_size, unit='B', unit_scale=True,
                               desc=f'↑ {rel_path}', leave=True) as pbar:
                         idx = 0
                         while chunk := f.read(protocol.CHUNK_PAYLOAD_SIZE):
                             await self._transport.send(protocol.encode_chunk(idx, chunk))
+                            sent += len(chunk)
                             pbar.update(len(chunk))
+                            self._on_transfer(rel_path, int(sent * 100 / stat.st_size))
                             idx += 1
-                            await asyncio.sleep(0)  # yield to event loop between chunks
+                            await asyncio.sleep(0)
 
             await self._transport.send(protocol.encode_end(checksum))
+            self._on_transfer(rel_path, 100, done=True)
             log.info(f'Sent {rel_path}')
 
     async def _send_move(self, old_path: str, new_path: str):
@@ -200,7 +217,7 @@ class SyncEngine:
             log.info(f'Sent delete: {rel_path}')
 
     # ------------------------------------------------------------------ #
-    # Inbound: BLE → local disk                                            #
+    # Inbound: TCP → local disk                                            #
     # ------------------------------------------------------------------ #
 
     def _on_receive(self, data: bytes):

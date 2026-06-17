@@ -1,5 +1,5 @@
 """
-TCP transport layer — replaces BLE.
+TCP transport layer.
 
 Server listens on TCP_PORT, client connects by hostname/IP.
 Messages are framed with the existing 3-byte protocol header.
@@ -15,13 +15,19 @@ OnReceive = Callable[[bytes], None]
 
 
 class TCPServer:
-    def __init__(self, on_receive: OnReceive, port: int = TCP_PORT, on_connect=None):
+    def __init__(self, on_receive: OnReceive, port: int = TCP_PORT,
+                 on_connect=None, on_disconnect=None):
         self._on_receive = on_receive
         self._port = port
         self._on_connect = on_connect
+        self._on_disconnect = on_disconnect
         self._server = None
         self._writer: Optional[asyncio.StreamWriter] = None
+        self._peer_addr: str = ''
         self._send_lock = asyncio.Lock()
+
+    def peer_addr(self) -> str:
+        return self._peer_addr
 
     async def start(self):
         self._server = await asyncio.start_server(
@@ -43,6 +49,7 @@ class TCPServer:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info('peername')
+        self._peer_addr = addr[0] if addr else ''
         log.info(f'Client connected from {addr}')
         self._writer = writer
         if self._on_connect:
@@ -53,7 +60,10 @@ class TCPServer:
             log.warning(f'Client {addr} disconnected')
         finally:
             self._writer = None
+            self._peer_addr = ''
             writer.close()
+            if self._on_disconnect:
+                self._on_disconnect()
 
     async def _read_loop(self, reader: asyncio.StreamReader):
         while True:
@@ -72,6 +82,9 @@ class TCPClient:
         self._send_lock = asyncio.Lock()
         self._host = None
         self._port = None
+
+    def peer_addr(self) -> str:
+        return self._host or ''
 
     async def connect(self, host: str, port: int):
         self._host = host

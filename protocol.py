@@ -1,5 +1,5 @@
 """
-Binary message protocol for BLE file sync.
+Binary message protocol for TCP file sync.
 
 Each message: [1 byte type][2 bytes payload length][payload bytes]
 """

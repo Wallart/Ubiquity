@@ -20,10 +20,10 @@ logging.basicConfig(
 
 
 async def async_main():
-    parser = argparse.ArgumentParser(description='Ubiquity — BLE bidirectional file sync')
+    parser = argparse.ArgumentParser(description='Ubiquity — TCP bidirectional file sync')
     parser.add_argument(
         '--mode', choices=['server', 'client'], required=True,
-        help='server = BLE peripheral (advertise), client = BLE central (connect)',
+        help='server = listen for incoming connections, client = connect to server',
     )
     parser.add_argument('--dir', required=True, help='Local directory to watch and sync')
     parser.add_argument(
