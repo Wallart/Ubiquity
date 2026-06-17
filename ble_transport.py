@@ -46,8 +46,8 @@ class BLEServer:
         await self._server.add_new_service(SERVICE_UUID)
         await self._server.add_new_characteristic(
             SERVICE_UUID, S2C_UUID,
-            GATTCharacteristicProperties.notify,
-            None,
+            GATTCharacteristicProperties.notify | GATTCharacteristicProperties.read,
+            bytearray(1),
             GATTAttributePermissions.readable,
         )
         await self._server.add_new_characteristic(
