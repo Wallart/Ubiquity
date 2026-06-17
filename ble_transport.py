@@ -101,8 +101,14 @@ class BLEClient:
 
         self._client = BleakClient(device, disconnected_callback=self._on_disconnect)
         await self._client.connect()
+        # Wait for bless/CoreBluetooth to finish committing its GATT table —
+        # without this, Windows receives a services-changed event mid-subscription
+        # and closes the connection.
+        await asyncio.sleep(3.0)
 
-        # Find S2C characteristic (case-insensitive, bleak already ran discovery on connect).
+        # Re-discover services after the services-changed event has settled.
+        await self._client.get_services()
+
         s2c_char = next(
             (c for s in self._client.services
                for c in s.characteristics
