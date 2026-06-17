@@ -1,13 +1,14 @@
 """
 UDP discovery — client-initiated to avoid Windows firewall issues.
 
-Client broadcasts "who's there?" → server replies unicast → client connects.
+Client broadcasts "who's there?" -> server replies unicast -> client connects.
 Only outbound UDP is needed on the client (always allowed by Windows Firewall).
 """
 import asyncio
 import json
 import logging
 import socket
+import threading
 
 log = logging.getLogger(__name__)
 
@@ -18,46 +19,58 @@ MAGIC_ANNOUNCE = 'ubiquity-announce-v1'
 
 
 def _broadcast_addresses() -> list:
-    """Return all candidate broadcast addresses for the local machine."""
     addrs = ['255.255.255.255']
     try:
-        hostname = socket.gethostname()
-        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ip = info[4][0]
             if not ip.startswith('127.'):
                 parts = ip.split('.')
                 parts[3] = '255'
-                subnet_bcast = '.'.join(parts)
-                if subnet_bcast not in addrs:
-                    addrs.append(subnet_bcast)
+                bcast = '.'.join(parts)
+                if bcast not in addrs:
+                    addrs.append(bcast)
     except Exception:
         pass
     return addrs
 
 
-class _ServerListenerProtocol(asyncio.DatagramProtocol):
+class DiscoveryServer:
+    """Listens for discovery broadcasts in a background thread and replies unicast."""
+
     def __init__(self, tcp_port: int):
         self._tcp_port = tcp_port
-        self._transport = None
+        self._stop = threading.Event()
+        self._thread = None
 
-    def connection_made(self, transport):
-        self._transport = transport
+    def start(self):
+        self._thread = threading.Thread(target=self._listen, daemon=True, name='discovery')
+        self._thread.start()
 
-    def datagram_received(self, data: bytes, addr):
-        try:
-            msg = json.loads(data)
-            if msg.get('magic') == MAGIC_DISCOVER:
-                response = json.dumps({'magic': MAGIC_ANNOUNCE, 'port': self._tcp_port}).encode()
-                self._transport.sendto(response, addr)
-                log.debug(f'Discovery reply sent to {addr}')
-        except (json.JSONDecodeError, KeyError):
-            pass
+    def stop(self):
+        self._stop.set()
 
-    def error_received(self, exc):
-        log.debug(f'Discovery listener error: {exc}')
-
-    def connection_lost(self, exc):
-        pass
+    def _listen(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(1.0)
+        sock.bind(('', DISCOVERY_PORT))
+        reply = json.dumps({'magic': MAGIC_ANNOUNCE, 'port': self._tcp_port}).encode()
+        log.info(f'Discovery listening on UDP port {DISCOVERY_PORT}')
+        while not self._stop.is_set():
+            try:
+                data, addr = sock.recvfrom(1024)
+                msg = json.loads(data)
+                if msg.get('magic') == MAGIC_DISCOVER:
+                    sock.sendto(reply, addr)
+                    log.debug(f'Discovery reply sent to {addr}')
+            except socket.timeout:
+                continue
+            except (json.JSONDecodeError, KeyError):
+                continue
+            except Exception as e:
+                log.debug(f'Discovery error: {e}')
+        sock.close()
 
 
 class _ClientProtocol(asyncio.DatagramProtocol):
@@ -84,37 +97,6 @@ class _ClientProtocol(asyncio.DatagramProtocol):
 
     def connection_lost(self, exc):
         pass
-
-
-class DiscoveryServer:
-    def __init__(self, tcp_port: int):
-        self._tcp_port = tcp_port
-        self._task = None
-
-    def start(self):
-        self._task = asyncio.ensure_future(self._listen())
-
-    def stop(self):
-        if self._task:
-            self._task.cancel()
-
-    async def _listen(self):
-        loop = asyncio.get_running_loop()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.bind(('0.0.0.0', DISCOVERY_PORT))
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: _ServerListenerProtocol(self._tcp_port),
-            sock=sock,
-        )
-        log.info(f'Discovery listening on UDP port {DISCOVERY_PORT}')
-        try:
-            await asyncio.Future()  # run forever
-        except asyncio.CancelledError:
-            pass
-        finally:
-            transport.close()
 
 
 class DiscoveryClient:
