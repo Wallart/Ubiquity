@@ -77,56 +77,35 @@ class DiscoveryServer:
         sock.close()
 
 
-class _ClientProtocol(asyncio.DatagramProtocol):
-    def __init__(self):
-        self.queue: asyncio.Queue = asyncio.Queue()
-        self._transport = None
-
-    def connection_made(self, transport):
-        self._transport = transport
-
-    def datagram_received(self, data: bytes, addr):
-        self.queue.put_nowait((data, addr))
-
-    def broadcast(self):
-        payload = json.dumps({'magic': MAGIC_DISCOVER}).encode()
-        for addr in _broadcast_addresses():
-            try:
-                self._transport.sendto(payload, (addr, DISCOVERY_PORT))
-            except Exception as e:
-                log.debug(f'Broadcast to {addr} error: {e}')
-
-    def error_received(self, exc):
-        log.debug(f'Discovery client error: {exc}')
-
-    def connection_lost(self, exc):
-        pass
-
-
 class DiscoveryClient:
     async def find(self) -> tuple:
         log.info(f'Broadcasting discovery on UDP port {DISCOVERY_PORT} (waiting for server)...')
         loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._find_blocking)
+
+    def _find_blocking(self) -> tuple:
+        payload = json.dumps({'magic': MAGIC_DISCOVER}).encode()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        transport, protocol = await loop.create_datagram_endpoint(
-            _ClientProtocol,
-            sock=sock,
-        )
+        sock.settimeout(BROADCAST_INTERVAL)
+        sock.bind(('', 0))
         try:
             while True:
-                protocol.broadcast()
+                for addr in _broadcast_addresses():
+                    try:
+                        sock.sendto(payload, (addr, DISCOVERY_PORT))
+                    except Exception as e:
+                        log.debug(f'Broadcast to {addr} error: {e}')
                 try:
-                    data, addr = await asyncio.wait_for(
-                        protocol.queue.get(),
-                        timeout=BROADCAST_INTERVAL,
-                    )
+                    data, addr = sock.recvfrom(1024)
                     msg = json.loads(data)
                     if msg.get('magic') == MAGIC_ANNOUNCE:
                         host, port = addr[0], msg['port']
                         log.info(f'Found server at {host}:{port}')
                         return host, port
-                except (asyncio.TimeoutError, json.JSONDecodeError, KeyError):
+                except socket.timeout:
+                    continue
+                except (json.JSONDecodeError, KeyError):
                     continue
         finally:
-            transport.close()
+            sock.close()
