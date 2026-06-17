@@ -27,8 +27,8 @@ async def async_main():
     )
     parser.add_argument('--dir', required=True, help='Local directory to watch and sync')
     parser.add_argument(
-        '--peer', default='127.0.0.1',
-        help='IP address or hostname of the server (default: 127.0.0.1)',
+        '--peer', default=None,
+        help='IP address of the server (omit to auto-discover via UDP broadcast)',
     )
     parser.add_argument(
         '--port', type=int, default=5000,

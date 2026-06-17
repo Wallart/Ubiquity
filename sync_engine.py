@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import protocol
+from discovery import DiscoveryServer
 from tcp_transport import TCPClient, TCPServer
 from watcher import FileWatcher
 
@@ -39,11 +40,12 @@ class _ReceiveState:
 
 
 class SyncEngine:
-    def __init__(self, watch_dir: str, mode: str, peer_name: str = '127.0.0.1', port: int = 5000):
+    def __init__(self, watch_dir: str, mode: str, peer_name: str = None, port: int = 5000):
         self._watch_dir = Path(watch_dir).resolve()
         self._mode = mode
         self._peer_name = peer_name
         self._port = port
+        self._discovery = None
         self._fs_queue: asyncio.Queue = asyncio.Queue()
         self._recv_state: Optional[_ReceiveState] = None
         self._transport = None
@@ -59,7 +61,12 @@ class SyncEngine:
         if self._mode == 'server':
             self._transport = TCPServer(self._on_receive, self._port, on_connect=self._send_all_files)
             await self._transport.start()
+            self._discovery = DiscoveryServer(self._port)
+            self._discovery.start()
         else:
+            if self._peer_name is None:
+                from discovery import DiscoveryClient
+                self._peer_name, self._port = await DiscoveryClient().find()
             self._transport = TCPClient(self._peer_name, self._port, self._on_receive)
             await self._transport.connect()
 
@@ -71,6 +78,7 @@ class SyncEngine:
         finally:
             watcher.stop()
             if self._mode == 'server':
+                self._discovery.stop()
                 await self._transport.stop()
             else:
                 await self._transport.disconnect()
