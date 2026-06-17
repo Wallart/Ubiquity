@@ -96,15 +96,19 @@ class SyncEngine:
                     if rel_path not in self._local_writes:
                         await self._send_file(rel_path)
                 elif kind == 'moved':
-                    await self._send_move(event[1], event[2])
+                    if self._mode != 'client':
+                        await self._send_move(event[1], event[2])
                 elif kind == 'deleted':
-                    rel_path = event[1]
-                    # Debounce: editors often delete+rename atomically (atomic write).
-                    await asyncio.sleep(0.3)
-                    if (self._watch_dir / rel_path).is_file():
-                        await self._send_file(rel_path)
+                    if self._mode == 'client':
+                        pass  # client deletions never propagate — server is source of truth
                     else:
-                        await self._send_delete(rel_path)
+                        rel_path = event[1]
+                        # Debounce: editors often delete+rename atomically (atomic write).
+                        await asyncio.sleep(0.3)
+                        if (self._watch_dir / rel_path).is_file():
+                            await self._send_file(rel_path)
+                        else:
+                            await self._send_delete(rel_path)
             except Exception:
                 log.exception(f'Error handling FS event {event}')
 
