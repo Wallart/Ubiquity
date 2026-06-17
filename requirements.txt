@@ -1,4 +1,3 @@
 bleak>=0.22.0
 watchdog>=4.0.0
-# bless is only needed on the server (peripheral) machine — not required on Windows clients.
-bless>=0.2.7
+bless>=0.2.7; sys_platform != "win32"

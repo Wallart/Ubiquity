@@ -51,11 +51,12 @@ class SyncEngine:
         self._local_writes: set[str] = set()
 
     async def run(self):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        self._loop = loop
         watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue)
 
         if self._mode == 'server':
-            self._transport = BLEServer(BLE_DEVICE_NAME, self._on_receive, loop)
+            self._transport = BLEServer(BLE_DEVICE_NAME, self._on_receive)
             await self._transport.start()
         else:
             self._transport = BLEClient(self._peer_name, self._on_receive)
@@ -139,7 +140,7 @@ class SyncEngine:
 
     def _on_receive(self, data: bytes):
         """BLE callback — may be called from a non-async context."""
-        asyncio.get_event_loop().call_soon_threadsafe(
+        self._loop.call_soon_threadsafe(
             lambda: asyncio.ensure_future(self._handle_message(data))
         )
 

@@ -29,10 +29,9 @@ OnReceive = Callable[[bytes], None]
 class BLEServer:
     """Peripheral role: advertises, accepts connections, sends notifications."""
 
-    def __init__(self, device_name: str, on_receive: OnReceive, loop: asyncio.AbstractEventLoop):
+    def __init__(self, device_name: str, on_receive: OnReceive):
         self._name = device_name
         self._on_receive = on_receive
-        self._loop = loop
         self._server = None
 
     async def start(self):
@@ -40,7 +39,7 @@ class BLEServer:
         from bless import (BlessServer, GATTAttributePermissions,
                            GATTCharacteristicProperties)
 
-        self._server = BlessServer(name=self._name, loop=self._loop)
+        self._server = BlessServer(name=self._name)
         self._server.read_request_func = self._handle_read
         self._server.write_request_func = self._handle_write
 
@@ -59,6 +58,7 @@ class BLEServer:
         )
 
         await self._server.start()
+        await asyncio.sleep(1.0)  # let CoreBluetooth finish registering the GATT table
         log.info(f'BLE server advertising as "{self._name}"')
 
     async def stop(self):
@@ -77,9 +77,8 @@ class BLEServer:
 
     def _handle_write(self, characteristic, value, **_):
         if str(characteristic.uuid).lower() == C2S_UUID.lower():
-            asyncio.run_coroutine_threadsafe(
-                self._dispatch(bytes(value)), self._loop
-            )
+            loop = asyncio.get_event_loop()
+            asyncio.run_coroutine_threadsafe(self._dispatch(bytes(value)), loop)
 
     async def _dispatch(self, data: bytes):
         self._on_receive(data)
