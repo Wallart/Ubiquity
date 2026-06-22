@@ -13,6 +13,7 @@ from typing import Optional
 from tqdm import tqdm
 
 import protocol
+from clipboard import ClipboardMonitor
 from discovery import DiscoveryServer
 from tcp_transport import TCPClient, TCPServer
 from watcher import FileWatcher
@@ -61,6 +62,7 @@ class SyncEngine:
         self._transport = None
         self._send_lock = asyncio.Lock()
         self._local_writes: set[str] = set()
+        self._clipboard = ClipboardMonitor(self._on_clipboard_change)
         # GUI callbacks — called from the asyncio thread, must be thread-safe.
         self._on_status = on_status or (lambda status, peer='': None)
         self._on_transfer = on_transfer or (lambda name, pct, done=False: None)
@@ -73,29 +75,37 @@ class SyncEngine:
         watcher.start()
         log.info(f'Sync engine running in {self._mode} mode for {self._watch_dir}')
 
-        if self._mode == 'server':
-            self._transport = TCPServer(
-                self._on_receive, self._port,
-                on_connect=self._on_client_connected,
-                on_disconnect=lambda: self._on_status('searching'),
-            )
-            await self._transport.start()
-            self._discovery = DiscoveryServer(self._port)
-            self._discovery.start()
-            self._on_status('searching')
+        clipboard_task = asyncio.ensure_future(self._clipboard.run())
+        try:
+            if self._mode == 'server':
+                self._transport = TCPServer(
+                    self._on_receive, self._port,
+                    on_connect=self._on_client_connected,
+                    on_disconnect=lambda: self._on_status('searching'),
+                )
+                await self._transport.start()
+                self._discovery = DiscoveryServer(self._port)
+                self._discovery.start()
+                self._on_status('searching')
+                try:
+                    await self._process_fs_events()
+                finally:
+                    self._discovery.stop()
+                    await self._transport.stop()
+                    watcher.stop()
+            else:
+                self._transport = TCPClient(self._on_receive)
+                try:
+                    await self._client_loop()
+                finally:
+                    await self._transport.disconnect()
+                    watcher.stop()
+        finally:
+            clipboard_task.cancel()
             try:
-                await self._process_fs_events()
-            finally:
-                self._discovery.stop()
-                await self._transport.stop()
-                watcher.stop()
-        else:
-            self._transport = TCPClient(self._on_receive)
-            try:
-                await self._client_loop()
-            finally:
-                await self._transport.disconnect()
-                watcher.stop()
+                await clipboard_task
+            except asyncio.CancelledError:
+                pass
 
     async def _on_client_connected(self):
         addr = self._transport.peer_addr()
@@ -216,6 +226,13 @@ class SyncEngine:
             await self._transport.send(protocol.encode_delete(rel_path))
             log.info(f'Sent delete: {rel_path}')
 
+    async def _on_clipboard_change(self, text: str):
+        if self._transport is None or not self._transport.connected:
+            return
+        async with self._send_lock:
+            await self._transport.send(protocol.encode_clipboard(text))
+        log.info(f'Sent clipboard ({len(text)} chars)')
+
     # ------------------------------------------------------------------ #
     # Inbound: TCP → local disk                                            #
     # ------------------------------------------------------------------ #
@@ -259,6 +276,11 @@ class SyncEngine:
         elif msg_type == protocol.MSG_REQUEST:
             rel_path = protocol.decode_request(data)
             await self._send_file(rel_path)
+
+        elif msg_type == protocol.MSG_CLIPBOARD:
+            text = protocol.decode_clipboard(data)
+            self._clipboard.set(text)
+            log.info(f'Received clipboard ({len(text)} chars)')
 
     async def _finalise_receive(self, state: '_ReceiveState'):
         meta = state.meta

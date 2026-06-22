@@ -29,6 +29,10 @@ class TCPServer:
     def peer_addr(self) -> str:
         return self._peer_addr
 
+    @property
+    def connected(self) -> bool:
+        return self._writer is not None
+
     async def start(self):
         self._server = await asyncio.start_server(
             self._handle_client, '0.0.0.0', self._port
@@ -85,6 +89,10 @@ class TCPClient:
 
     def peer_addr(self) -> str:
         return self._host or ''
+
+    @property
+    def connected(self) -> bool:
+        return self._connected.is_set()
 
     async def connect(self, host: str, port: int):
         self._host = host

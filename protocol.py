@@ -10,12 +10,13 @@ from typing import Tuple
 
 CHUNK_PAYLOAD_SIZE = 32768  # 32KB — stays under asyncio's 64KB StreamReader buffer
 
-MSG_ANNOUNCE = 0x01  # start of file transfer
-MSG_CHUNK    = 0x02  # file data chunk
-MSG_END      = 0x03  # transfer complete
-MSG_MOVE     = 0x05  # file renamed/moved
-MSG_DELETE   = 0x06  # file deleted
-MSG_REQUEST  = 0x07  # client requests a file from server
+MSG_ANNOUNCE   = 0x01  # start of file transfer
+MSG_CHUNK      = 0x02  # file data chunk
+MSG_END        = 0x03  # transfer complete
+MSG_MOVE       = 0x05  # file renamed/moved
+MSG_DELETE     = 0x06  # file deleted
+MSG_REQUEST    = 0x07  # client requests a file from server
+MSG_CLIPBOARD  = 0x08  # clipboard text sync
 
 
 def file_checksum(path: str) -> str:
@@ -97,3 +98,17 @@ def encode_request(path: str) -> bytes:
 def decode_request(data: bytes) -> str:
     _, payload = _unpack(data)
     return payload.decode()
+
+
+# 2-byte length field caps payload at 65535; leave headroom for UTF-8 multibyte chars.
+_CLIPBOARD_MAX_BYTES = 60000
+
+
+def encode_clipboard(text: str) -> bytes:
+    payload = text.encode('utf-8', errors='replace')[:_CLIPBOARD_MAX_BYTES]
+    return _pack(MSG_CLIPBOARD, payload)
+
+
+def decode_clipboard(data: bytes) -> str:
+    _, payload = _unpack(data)
+    return payload.decode('utf-8', errors='replace')
