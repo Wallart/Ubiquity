@@ -52,35 +52,6 @@ def setup_logging():
 
 
 # ------------------------------------------------------------------ #
-# macOS startup feedback                                               #
-# ------------------------------------------------------------------ #
-
-def _macos_dock_bounce():
-    """Temporarily show + bounce the Dock icon while the tray initialises."""
-    if sys.platform != 'darwin':
-        return
-    try:
-        import AppKit
-        ns_app = AppKit.NSApplication.sharedApplication()
-        ns_app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
-        ns_app.requestUserAttention_(AppKit.NSInformationalRequest)
-
-        def _hide():
-            import time
-            time.sleep(1.0)
-            try:
-                AppKit.NSApplication.sharedApplication().setActivationPolicy_(
-                    AppKit.NSApplicationActivationPolicyAccessory
-                )
-            except Exception:
-                pass
-
-        threading.Thread(target=_hide, daemon=True).start()
-    except Exception:
-        pass
-
-
-# ------------------------------------------------------------------ #
 # Icon drawing                                                         #
 # ------------------------------------------------------------------ #
 
@@ -136,7 +107,6 @@ class TrayApp:
         )
 
     def run(self):
-        _macos_dock_bounce()
         threading.Thread(target=self._ui_pump, daemon=True, name='ui-pump').start()
         self._start_engine()
         self._icon.run()
