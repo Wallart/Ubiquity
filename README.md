@@ -113,6 +113,38 @@ Les logs sont écrits dans `~/.ubiquity/ubiquity.log` (rotation automatique, 1 M
 | 5000 | TCP | Transfert de fichiers et presse-papiers |
 | 5999 | UDP | Auto-découverte du serveur |
 
+## Icône de l'application
+
+Le fichier source est `assets/icon.png` (1024×1024). Les formats dérivés doivent être regénérés si l'icône change.
+
+**macOS — `.icns`** (nécessite `sips` et `iconutil`, inclus dans Xcode Command Line Tools) :
+
+```bash
+mkdir -p assets/ubiquity.iconset
+for size in 16 32 64 128 256 512; do
+    sips -z $size $size assets/icon.png \
+        --out "assets/ubiquity.iconset/icon_${size}x${size}.png" > /dev/null
+done
+for size in 16 32 64 128 256; do
+    sips -z $((size*2)) $((size*2)) assets/icon.png \
+        --out "assets/ubiquity.iconset/icon_${size}x${size}@2x.png" > /dev/null
+done
+iconutil --convert icns assets/ubiquity.iconset --output assets/ubiquity.icns
+rm -rf assets/ubiquity.iconset
+```
+
+**Windows — `.ico`** (nécessite Pillow, déjà dans `requirements.txt`) :
+
+```bash
+python3 -c "
+from PIL import Image
+img = Image.open('assets/icon.png').convert('RGBA')
+sizes = [(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)]
+imgs = [img.resize(s, Image.Resampling.LANCZOS) for s in sizes]
+imgs[0].save('assets/ubiquity.ico', format='ICO', sizes=sizes, append_images=imgs[1:])
+"
+```
+
 ## Build — distributable standalone
 
 Les exécutables sont produits avec PyInstaller. Aucune installation de Python requise sur les machines cibles.
