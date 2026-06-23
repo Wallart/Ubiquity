@@ -1,25 +1,29 @@
-# PyInstaller spec — produces a single-file executable on macOS and Windows.
-# Build:
-#   macOS   →  pyinstaller ubiquity.spec
-#   Windows →  pyinstaller ubiquity.spec
+# PyInstaller spec — one-file executable for macOS, Windows, and Linux.
 #
-# Output: dist/ubiquity  (macOS)  or  dist/ubiquity.exe  (Windows)
+# Build:
+#   macOS   →  ./build.sh          →  dist/Ubiquity.app  +  dist/Ubiquity.dmg
+#   Windows →  build.bat           →  dist/ubiquity.exe
+#              build.bat installer →  dist/UbiquitySetup.exe  (no-admin Inno Setup)
+#   Linux   →  ./build.sh          →  dist/ubiquity
 
 import sys
 
 block_cipher = None
 
 hidden_imports = [
-    # watchdog uses platform-specific backends loaded at runtime
+    # watchdog platform backends (loaded at runtime via importlib)
     'watchdog.observers',
-    'watchdog.observers.fsevents',   # macOS
-    'watchdog.observers.inotify',    # Linux
-    'watchdog.observers.winapi',     # Windows
-    'watchdog.observers.polling',    # fallback
+    'watchdog.observers.fsevents',
+    'watchdog.observers.inotify',
+    'watchdog.observers.winapi',
+    'watchdog.observers.polling',
     # pystray platform backends
     'pystray._darwin',
     'pystray._win32',
-    # tkinter (settings dialog)
+    'pystray._xorg',
+    # pyperclip platform helpers
+    'pyperclip.handlers',
+    # settings dialog
     'tkinter',
     'tkinter.filedialog',
 ]
@@ -48,7 +52,8 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    # No console window — this is a tray app, not a CLI tool.
+    console=False,
     onefile=True,
 )
 
@@ -57,4 +62,10 @@ if sys.platform == 'darwin':
         exe,
         name='Ubiquity.app',
         bundle_identifier='com.ubiquity.sync',
+        info_plist={
+            # Hide from Dock — the app lives entirely in the menu bar.
+            'LSUIElement': True,
+            'NSHighResolutionCapable': True,
+            'CFBundleShortVersionString': '1.0',
+        },
     )
