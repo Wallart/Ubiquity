@@ -312,15 +312,29 @@ class TrayApp:
         progress = None
         if self._transfers:
             progress = int(sum(self._transfers.values()) / len(self._transfers))
-        try:
-            self._icon.icon = _make_icon(color, progress)
-            # macOS: pystray rebuilds the menu via NSMenuDelegate (menuWillOpen_)
-            # each time the user opens it — calling update_menu() from a background
-            # thread violates Cocoa's main-thread rule and creates a duplicate icon.
-            if sys.platform != 'darwin':
+
+        # PIL image creation is thread-safe; compute it here on the background thread.
+        image = _make_icon(color, progress)
+
+        def _update():
+            if self._stopping:
+                return
+            try:
+                self._icon.icon = image
                 self._icon.update_menu()
-        except Exception:
-            pass
+            except Exception:
+                pass
+
+        if sys.platform == 'darwin':
+            # All Cocoa/pystray calls must happen on the main thread.
+            # performBlock_ schedules _update on the next NSRunLoop iteration.
+            try:
+                from Foundation import NSRunLoop
+                NSRunLoop.mainRunLoop().performBlock_(_update)
+            except Exception:
+                _update()
+        else:
+            _update()
 
     # ------------------------------------------------------------------ #
     # Settings dialog                                                      #
