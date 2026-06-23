@@ -12,11 +12,11 @@ from typing import Optional
 
 from tqdm import tqdm
 
-import protocol
-from clipboard import ClipboardMonitor
-from discovery import DiscoveryServer
-from tcp_transport import TCPClient, TCPServer
-from watcher import FileWatcher
+from ubiquity import protocol
+from ubiquity.clipboard import ClipboardMonitor
+from ubiquity.discovery import DiscoveryServer
+from ubiquity.transport import TCPClient, TCPServer
+from ubiquity.watcher import FileWatcher
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class SyncEngine:
         await self._send_all_files()
 
     async def _client_loop(self):
-        from discovery import DiscoveryClient
+        from ubiquity.discovery import DiscoveryClient
         use_discovery = self._peer_name is None
         while True:
             self._on_status('searching')

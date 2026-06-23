@@ -10,8 +10,8 @@ import logging
 import sys
 from pathlib import Path
 
-from config import SyncFilter, load as load_config
-from sync_engine import SyncEngine
+from ubiquity.config import SyncFilter, load as load_config
+from ubiquity.engine import SyncEngine
 
 logging.basicConfig(
     level=logging.INFO,
