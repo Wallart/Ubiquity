@@ -36,7 +36,7 @@ a = Analysis(
     hiddenimports=hidden_imports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=['google', 'google.cloud'],
     cipher=block_cipher,
 )
 
