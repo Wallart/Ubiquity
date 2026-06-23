@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
 # Build Ubiquity for macOS (or Linux).
 #
-# Prerequisites:
+# Usage:
+#   ./build.sh              — native macOS or Linux build
+#   ./build.sh --linux      — cross-compile Linux binary from macOS via Docker
+#
+# Prerequisites (native):
 #   pip install pyinstaller
+#
+# Prerequisites (--linux):
+#   Docker Desktop running
 #
 # Output (macOS):
 #   dist/Ubiquity.app   — drag-and-drop app bundle
 #   dist/Ubiquity.dmg   — distributable disk image
 #
-# Output (Linux):
-#   dist/ubiquity       — standalone binary (requires xclip or xsel for clipboard)
+# Output (Linux / --linux):
+#   dist/ubiquity-linux — standalone binary (requires GTK + xclip on target)
 
 set -e
+
+# ── Cross-compile Linux binary from macOS via Docker ──────────────────
+if [[ "$1" == "--linux" ]]; then
+    echo "→ Building Linux binary via Docker…"
+    docker build -t ubiquity-linux-builder -f docker/Dockerfile.linux .
+    mkdir -p dist
+    docker run --rm -v "$(pwd)/dist:/output" ubiquity-linux-builder
+    exit 0
+fi
 
 pyinstaller ubiquity.spec --clean
 

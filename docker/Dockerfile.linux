@@ -1,0 +1,31 @@
+# Build a Linux binary from macOS via Docker.
+#
+# Usage (run from project root):
+#   docker build -t ubiquity-builder -f docker/Dockerfile.linux .
+#   docker run --rm -v "$(pwd)/dist:/output" ubiquity-builder
+#
+# Output: dist/ubiquity  (ELF binary for x86-64 Linux)
+#
+# Note: the binary requires GTK and xclip on the target system:
+#   sudo apt install gir1.2-appindicator3-0.1 xclip
+
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        binutils \
+        upx-ucl \
+        xclip \
+        gir1.2-appindicator3-0.1 \
+        gir1.2-gtk-3.0 \
+        python3-gi \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt pyinstaller
+
+COPY . .
+RUN pyinstaller ubiquity.spec --clean
+
+CMD ["sh", "-c", "cp dist/ubiquity /output/ubiquity-linux && echo '✓ /output/ubiquity-linux'"]
