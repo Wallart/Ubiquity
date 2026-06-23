@@ -314,7 +314,11 @@ class TrayApp:
             progress = int(sum(self._transfers.values()) / len(self._transfers))
         try:
             self._icon.icon = _make_icon(color, progress)
-            self._icon.update_menu()
+            # macOS: pystray rebuilds the menu via NSMenuDelegate (menuWillOpen_)
+            # each time the user opens it — calling update_menu() from a background
+            # thread violates Cocoa's main-thread rule and creates a duplicate icon.
+            if sys.platform != 'darwin':
+                self._icon.update_menu()
         except Exception:
             pass
 
