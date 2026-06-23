@@ -40,6 +40,17 @@ class TCPServer:
         log.info(f'TCP server listening on 0.0.0.0:{self._port}')
 
     async def stop(self):
+        # Close the active client connection explicitly so the remote end
+        # receives a FIN and its read_loop can detect the disconnection.
+        # Without this, the client stays blocked on readexactly() and never
+        # reconnects to the new server instance after a restart.
+        writer = self._writer
+        if writer:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
         if self._server:
             self._server.close()
             await self._server.wait_closed()
