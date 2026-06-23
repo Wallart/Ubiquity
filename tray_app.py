@@ -59,9 +59,9 @@ def _setup_logging():
 
 _PALETTE = {
     'grey':   (120, 120, 120),
-    'yellow': (234, 179,   8),
-    'green':  ( 34, 197,  94),
     'red':    (239,  68,  68),
+    'orange': (249, 115,  22),
+    'green':  ( 34, 197,  94),
 }
 
 
@@ -294,12 +294,14 @@ class TrayApp:
                 self._apply_icon()
 
     def _apply_icon(self):
-        color = {
-            'stopped':   'grey',
-            'searching': 'yellow',
-            'connected': 'green',
-            'error':     'red',
-        }.get(self._status, 'grey')
+        if self._status == 'stopped':
+            color = 'grey'
+        elif self._status in ('searching', 'error'):
+            color = 'red'
+        elif self._transfers:
+            color = 'orange'
+        else:
+            color = 'green'
         progress = None
         if self._transfers:
             progress = int(sum(self._transfers.values()) / len(self._transfers))
