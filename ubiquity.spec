@@ -29,7 +29,7 @@ hidden_imports = [
 ]
 
 a = Analysis(
-    ['tray_app.py'],
+    ['tray.py'],
     pathex=[],
     binaries=[],
     datas=[],

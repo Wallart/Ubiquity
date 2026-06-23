@@ -1,8 +1,8 @@
 """
-Ubiquity — TCP bidirectional file sync
+Ubiquity — headless / CLI mode (no tray icon)
 Usage:
-  Server (macOS):   python main.py --mode server --dir /path/to/folder
-  Client (Windows): python main.py --mode client --dir C:/path/to/folder --peer <server-ip>
+  Server: python headless.py --mode server --dir /path/to/folder
+  Client: python headless.py --mode client --dir C:/path/to/folder --peer <server-ip>
 """
 import argparse
 import asyncio
