@@ -49,11 +49,13 @@ class InodeTracker:
 
 class _EventHandler(FileSystemEventHandler):
     def __init__(self, watch_dir: Path, tracker: InodeTracker,
-                 loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+                 loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
+                 is_excluded=None):
         self._watch_dir = watch_dir
         self._tracker = tracker
         self._loop = loop
         self._queue = queue
+        self._is_excluded = is_excluded or (lambda _: False)
 
     def _rel(self, abs_path: str) -> str:
         return str(Path(abs_path).relative_to(self._watch_dir))
@@ -67,6 +69,8 @@ class _EventHandler(FileSystemEventHandler):
         try:
             stat = os.stat(event.src_path)
             rel = self._rel(event.src_path)
+            if self._is_excluded(rel):
+                return
             self._tracker.update(rel, stat.st_ino)
             self._emit(('modified', rel))
         except OSError:
@@ -78,6 +82,8 @@ class _EventHandler(FileSystemEventHandler):
         try:
             stat = os.stat(event.src_path)
             rel = self._rel(event.src_path)
+            if self._is_excluded(rel):
+                return
             self._tracker.update(rel, stat.st_ino)
             self._emit(('modified', rel))
         except OSError:
@@ -89,6 +95,8 @@ class _EventHandler(FileSystemEventHandler):
         old_rel = self._rel(event.src_path)
         new_rel = self._rel(event.dest_path)
         self._tracker.remove(old_rel)
+        if self._is_excluded(new_rel):
+            return
         try:
             stat = os.stat(event.dest_path)
             self._tracker.update(new_rel, stat.st_ino)
@@ -101,14 +109,17 @@ class _EventHandler(FileSystemEventHandler):
             return
         rel = self._rel(event.src_path)
         self._tracker.remove(rel)
+        if self._is_excluded(rel):
+            return
         self._emit(('deleted', rel))
 
 
 class FileWatcher:
-    def __init__(self, watch_dir: str, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+    def __init__(self, watch_dir: str, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue,
+                 is_excluded=None):
         self._watch_dir = Path(watch_dir)
         self._tracker = InodeTracker(self._watch_dir)
-        self._handler = _EventHandler(self._watch_dir, self._tracker, loop, queue)
+        self._handler = _EventHandler(self._watch_dir, self._tracker, loop, queue, is_excluded)
         self._observer = Observer()
 
     def start(self):

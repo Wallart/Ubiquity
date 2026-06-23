@@ -10,6 +10,7 @@ import logging
 import sys
 from pathlib import Path
 
+from config import SyncFilter, load as load_config
 from sync_engine import SyncEngine
 
 logging.basicConfig(
@@ -41,7 +42,9 @@ async def async_main():
         print(f'Error: {watch_dir} is not a directory', file=sys.stderr)
         sys.exit(1)
 
-    engine = SyncEngine(str(watch_dir), args.mode, args.peer, args.port)
+    cfg = load_config()
+    engine = SyncEngine(str(watch_dir), args.mode, args.peer, args.port,
+                        sync_filter=SyncFilter(cfg.get('exclude', [])))
     await engine.run()
 
 

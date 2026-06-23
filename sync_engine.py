@@ -51,7 +51,7 @@ class _ReceiveState:
 
 class SyncEngine:
     def __init__(self, watch_dir: str, mode: str, peer_name: str = None, port: int = 5000,
-                 on_status=None, on_transfer=None):
+                 on_status=None, on_transfer=None, sync_filter=None):
         self._watch_dir = Path(watch_dir).resolve()
         self._mode = mode
         self._peer_name = peer_name
@@ -62,6 +62,7 @@ class SyncEngine:
         self._transport = None
         self._send_lock = asyncio.Lock()
         self._local_writes: set[str] = set()
+        self._filter = sync_filter
         self._clipboard = ClipboardMonitor(self._on_clipboard_change)
         # GUI callbacks — called from the asyncio thread, must be thread-safe.
         self._on_status = on_status or (lambda status, peer='': None)
@@ -70,7 +71,8 @@ class SyncEngine:
     async def run(self):
         loop = asyncio.get_running_loop()
         self._loop = loop
-        watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue)
+        is_excl = self._filter.is_excluded if self._filter else None
+        watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue, is_excluded=is_excl)
 
         watcher.start()
         log.info(f'Sync engine running in {self._mode} mode for {self._watch_dir}')
@@ -147,6 +149,9 @@ class SyncEngine:
         for abs_path in sorted(self._watch_dir.rglob('*')):
             if abs_path.is_file():
                 rel = str(abs_path.relative_to(self._watch_dir))
+                if self._filter and self._filter.is_excluded(rel):
+                    log.debug(f'Skipping excluded file: {rel}')
+                    continue
                 await self._send_file(rel)
 
     async def _process_fs_events(self):

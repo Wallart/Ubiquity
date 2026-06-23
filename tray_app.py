@@ -5,7 +5,6 @@ Wraps the sync engine in a background asyncio thread.
 Dependencies: pystray, Pillow  (pip install pystray pillow)
 """
 import asyncio
-import json
 import logging
 import queue
 import threading
@@ -15,6 +14,7 @@ from typing import Optional
 import pystray
 from PIL import Image, ImageDraw
 
+from config import SyncFilter, load as load_config, save as save_config
 from sync_engine import SyncEngine
 
 log = logging.getLogger(__name__)
@@ -30,28 +30,7 @@ except ImportError:
 # Config                                                               #
 # ------------------------------------------------------------------ #
 
-CONFIG_PATH = Path.home() / '.ubiquity' / 'config.json'
-
-DEFAULTS = {
-    'mode':      'client',
-    'peer':      '',
-    'port':      5000,
-    'watch_dir': str(Path.home() / 'Ubiquity'),
-}
-
-
-def _load_config() -> dict:
-    if CONFIG_PATH.exists():
-        try:
-            return {**DEFAULTS, **json.loads(CONFIG_PATH.read_text())}
-        except Exception:
-            pass
-    return dict(DEFAULTS)
-
-
-def _save_config(cfg: dict):
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+from config import CONFIG_PATH  # re-export for the settings dialog
 
 
 # ------------------------------------------------------------------ #
@@ -89,7 +68,7 @@ def _make_icon(color: str, progress: Optional[int] = None) -> Image.Image:
 
 class TrayApp:
     def __init__(self):
-        self._cfg = _load_config()
+        self._cfg = load_config()
 
         # State — written from asyncio thread, read on main thread.
         # Individual assignments are GIL-atomic in CPython.
@@ -176,12 +155,12 @@ class TrayApp:
 
     def _action_set_server(self, icon, item):
         self._cfg['mode'] = 'server'
-        _save_config(self._cfg)
+        save_config(self._cfg)
         icon.update_menu()
 
     def _action_set_client(self, icon, item):
         self._cfg['mode'] = 'client'
-        _save_config(self._cfg)
+        save_config(self._cfg)
         icon.update_menu()
 
     def _action_settings(self, icon, item):
@@ -223,6 +202,7 @@ class TrayApp:
             port=int(self._cfg.get('port', 5000)),
             on_status=self._on_engine_status,
             on_transfer=self._on_engine_transfer,
+            sync_filter=SyncFilter(self._cfg.get('exclude', [])),
         )
         try:
             loop.run_until_complete(engine.run())
@@ -296,7 +276,7 @@ class TrayApp:
     def _settings_dialog(self):
         if not HAS_TKINTER:
             import os, subprocess, sys
-            _save_config(self._cfg)
+            save_config(self._cfg)
             if sys.platform == 'darwin':
                 subprocess.Popen(['open', str(CONFIG_PATH)])
             elif sys.platform == 'win32':
@@ -333,7 +313,7 @@ class TrayApp:
                 self._cfg['port'] = int(port_var.get())
             except ValueError:
                 pass
-            _save_config(self._cfg)
+            save_config(self._cfg)
             win.destroy()
 
         tk.Button(win, text='Enregistrer', command=save, width=14).grid(
