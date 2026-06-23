@@ -64,13 +64,34 @@ class SyncEngine:
         self._local_writes: set[str] = set()
         self._filter = sync_filter
         self._clipboard = ClipboardMonitor(self._on_clipboard_change)
+        self._stop_event: Optional[asyncio.Event] = None
         # GUI callbacks — called from the asyncio thread, must be thread-safe.
         self._on_status = on_status or (lambda status, peer='': None)
         self._on_transfer = on_transfer or (lambda name, pct, done=False: None)
 
+    def request_stop(self):
+        """Thread-safe: signal the engine to stop gracefully."""
+        if self._stop_event and self._loop:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+
+    async def _run_until_stopped(self, coro):
+        """Run coro concurrently with the stop signal; cancel the other when one finishes."""
+        task = asyncio.ensure_future(coro)
+        stop_task = asyncio.ensure_future(self._stop_event.wait())
+        done, pending = await asyncio.wait(
+            {task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
     async def run(self):
         loop = asyncio.get_running_loop()
         self._loop = loop
+        self._stop_event = asyncio.Event()
         is_excl = self._filter.is_excluded if self._filter else None
         watcher = FileWatcher(str(self._watch_dir), loop, self._fs_queue, is_excluded=is_excl)
 
@@ -90,7 +111,7 @@ class SyncEngine:
                 self._discovery.start()
                 self._on_status('searching')
                 try:
-                    await self._process_fs_events()
+                    await self._run_until_stopped(self._process_fs_events())
                 finally:
                     self._discovery.stop()
                     await self._transport.stop()
@@ -98,7 +119,7 @@ class SyncEngine:
             else:
                 self._transport = TCPClient(self._on_receive)
                 try:
-                    await self._client_loop()
+                    await self._run_until_stopped(self._client_loop())
                 finally:
                     await self._transport.disconnect()
                     watcher.stop()
@@ -132,12 +153,14 @@ class SyncEngine:
 
             self._on_status('connected', host)
             fs_task = asyncio.ensure_future(self._process_fs_events())
-            await self._transport.wait_disconnected()
-            fs_task.cancel()
             try:
-                await fs_task
-            except asyncio.CancelledError:
-                pass
+                await self._transport.wait_disconnected()
+            finally:
+                fs_task.cancel()
+                try:
+                    await fs_task
+                except asyncio.CancelledError:
+                    pass
             log.info('Server lost — restarting discovery...')
 
     # ------------------------------------------------------------------ #

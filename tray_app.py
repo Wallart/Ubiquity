@@ -1,12 +1,16 @@
 """
-Ubiquity system tray application.
-Wraps the sync engine in a background asyncio thread.
+Ubiquity — system tray application.
 
-Dependencies: pystray, Pillow  (pip install pystray pillow)
+Single entry-point: launching this file starts the sync engine automatically.
+The engine runs in a background asyncio thread; the tray lives on the main thread.
 """
 import asyncio
 import logging
+import logging.handlers
+import os
 import queue
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Optional
@@ -14,7 +18,7 @@ from typing import Optional
 import pystray
 from PIL import Image, ImageDraw
 
-from config import SyncFilter, load as load_config, save as save_config
+from config import CONFIG_PATH, SyncFilter, load as load_config, save as save_config
 from sync_engine import SyncEngine
 
 log = logging.getLogger(__name__)
@@ -26,11 +30,27 @@ try:
 except ImportError:
     HAS_TKINTER = False
 
+
 # ------------------------------------------------------------------ #
-# Config                                                               #
+# Logging                                                              #
 # ------------------------------------------------------------------ #
 
-from config import CONFIG_PATH  # re-export for the settings dialog
+def _setup_logging():
+    log_path = Path.home() / '.ubiquity' / 'ubiquity.log'
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=1_000_000, backupCount=2, encoding='utf-8'
+    )
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s  %(levelname)-8s  %(name)s  %(message)s', datefmt='%H:%M:%S'
+    ))
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
+    # Also keep a console handler so CLI usage still prints.
+    if not any(isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+               for h in root.handlers):
+        root.addHandler(logging.StreamHandler())
 
 
 # ------------------------------------------------------------------ #
@@ -70,18 +90,16 @@ class TrayApp:
     def __init__(self):
         self._cfg = load_config()
 
-        # State — written from asyncio thread, read on main thread.
-        # Individual assignments are GIL-atomic in CPython.
-        self._status = 'stopped'   # 'stopped' | 'searching' | 'connected' | 'error'
+        # Engine state — written from asyncio thread (GIL-atomic assignments).
+        self._status = 'stopped'
         self._peer_addr = ''
         self._transfers: dict[str, int] = {}
         self._last_error = ''
 
+        self._engine: Optional[SyncEngine] = None
         self._engine_thread: Optional[threading.Thread] = None
         self._engine_loop: Optional[asyncio.AbstractEventLoop] = None
 
-        # Queue used to push icon/menu updates from the asyncio thread
-        # back to pystray via a periodic detached timer.
         self._ui_queue: queue.SimpleQueue = queue.SimpleQueue()
 
         self._icon = pystray.Icon(
@@ -92,13 +110,12 @@ class TrayApp:
         )
 
     def run(self):
-        # Drain the UI queue every 250 ms via a background daemon thread
-        # so pystray (main thread) always gets updates from the engine.
         threading.Thread(target=self._ui_pump, daemon=True, name='ui-pump').start()
+        self._start_engine()   # auto-start on launch
         self._icon.run()
 
     # ------------------------------------------------------------------ #
-    # Menu factory — called by pystray each time the menu opens           #
+    # Menu factory                                                         #
     # ------------------------------------------------------------------ #
 
     def _build_menu(self):
@@ -106,7 +123,7 @@ class TrayApp:
 
         status_text = {
             'stopped':   'Arrêté',
-            'searching': 'Recherche en cours…',
+            'searching': 'Recherche du pair…',
             'connected': f'Connecté  —  {self._peer_addr}',
             'error':     f'Erreur  —  {self._last_error}',
         }.get(self._status, self._status)
@@ -123,6 +140,9 @@ class TrayApp:
             items.append(pystray.Menu.SEPARATOR)
 
         items += [
+            pystray.MenuItem('Démarrer',  self._action_start, enabled=not running),
+            pystray.MenuItem('Arrêter',   self._action_stop,  enabled=running),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 'Mode Serveur',
                 self._action_set_server,
@@ -138,19 +158,17 @@ class TrayApp:
                 enabled=not running,
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem('Paramètres…', self._action_settings, enabled=not running),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem('Arrêter',   self._action_stop,  enabled=running),
-            pystray.MenuItem('Démarrer',  self._action_start, enabled=not running),
+            pystray.MenuItem('Ouvrir le dossier', self._action_open_folder),
+            pystray.MenuItem('Paramètres…',        self._action_settings),
+            pystray.MenuItem('Voir les logs',      self._action_open_logs),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Quitter', self._action_quit),
         ]
 
-        # pystray expects a tuple from a menu factory
         return tuple(items)
 
     # ------------------------------------------------------------------ #
-    # Menu callbacks — called on the pystray / main thread                #
+    # Menu callbacks                                                       #
     # ------------------------------------------------------------------ #
 
     def _action_set_server(self, icon, item):
@@ -163,17 +181,8 @@ class TrayApp:
         save_config(self._cfg)
         icon.update_menu()
 
-    def _action_settings(self, icon, item):
-        threading.Thread(target=self._settings_dialog, daemon=True).start()
-
     def _action_start(self, icon, item):
-        if self._engine_thread and self._engine_thread.is_alive():
-            return
-        Path(self._cfg['watch_dir']).mkdir(parents=True, exist_ok=True)
-        self._engine_thread = threading.Thread(
-            target=self._run_engine, daemon=True, name='ubiquity-engine',
-        )
-        self._engine_thread.start()
+        self._start_engine()
 
     def _action_stop(self, icon, item):
         self._stop_engine()
@@ -182,20 +191,49 @@ class TrayApp:
         self._stop_engine()
         icon.stop()
 
-    def _stop_engine(self):
-        if self._engine_loop and self._engine_loop.is_running():
-            self._engine_loop.call_soon_threadsafe(self._engine_loop.stop)
+    def _action_open_folder(self, icon, item):
+        folder = self._cfg['watch_dir']
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', folder])
+        elif sys.platform == 'win32':
+            subprocess.Popen(['explorer', folder])
+
+    def _action_open_logs(self, icon, item):
+        log_path = Path.home() / '.ubiquity' / 'ubiquity.log'
+        if not log_path.exists():
+            return
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', str(log_path)])
+        elif sys.platform == 'win32':
+            os.startfile(str(log_path))
+
+    def _action_settings(self, icon, item):
+        threading.Thread(target=self._settings_dialog, daemon=True).start()
 
     # ------------------------------------------------------------------ #
-    # Engine thread                                                        #
+    # Engine management                                                    #
     # ------------------------------------------------------------------ #
+
+    def _start_engine(self):
+        if self._engine_thread and self._engine_thread.is_alive():
+            return
+        Path(self._cfg['watch_dir']).mkdir(parents=True, exist_ok=True)
+        self._engine_thread = threading.Thread(
+            target=self._run_engine, daemon=True, name='ubiquity-engine',
+        )
+        self._engine_thread.start()
+
+    def _stop_engine(self):
+        engine = self._engine
+        if engine:
+            engine.request_stop()
 
     def _run_engine(self):
         loop = asyncio.new_event_loop()
         self._engine_loop = loop
         asyncio.set_event_loop(loop)
 
-        engine = SyncEngine(
+        self._engine = SyncEngine(
             watch_dir=self._cfg['watch_dir'],
             mode=self._cfg['mode'],
             peer_name=self._cfg.get('peer') or None,
@@ -205,17 +243,18 @@ class TrayApp:
             sync_filter=SyncFilter(self._cfg.get('exclude', [])),
         )
         try:
-            loop.run_until_complete(engine.run())
+            loop.run_until_complete(self._engine.run())
         except Exception as e:
             log.exception('Engine crashed')
             self._ui_queue.put(('error', str(e), ''))
         finally:
             loop.close()
+            self._engine = None
             self._engine_loop = None
             self._ui_queue.put(('status', 'stopped', ''))
 
     # ------------------------------------------------------------------ #
-    # Engine callbacks — called from asyncio thread, push to UI queue     #
+    # Engine callbacks → UI queue                                          #
     # ------------------------------------------------------------------ #
 
     def _on_engine_status(self, status: str, peer: str = ''):
@@ -225,7 +264,7 @@ class TrayApp:
         self._ui_queue.put(('transfer', name, pct, done))
 
     # ------------------------------------------------------------------ #
-    # UI pump — daemon thread, drains queue and updates pystray            #
+    # UI pump — drains queue, updates pystray from a daemon thread         #
     # ------------------------------------------------------------------ #
 
     def _ui_pump(self):
@@ -237,12 +276,13 @@ class TrayApp:
 
             kind = msg[0]
             if kind in ('status', 'error'):
-                status = 'error' if kind == 'error' else msg[1]
-                peer   = msg[2]
                 if kind == 'error':
+                    self._status    = 'error'
                     self._last_error = msg[1][:60]
-                self._status    = status
-                self._peer_addr = peer
+                    self._peer_addr  = ''
+                else:
+                    self._status    = msg[1]
+                    self._peer_addr = msg[2]
                 self._transfers.clear()
                 self._apply_icon()
             elif kind == 'transfer':
@@ -267,7 +307,7 @@ class TrayApp:
             self._icon.icon = _make_icon(color, progress)
             self._icon.update_menu()
         except Exception:
-            pass  # icon may not be ready yet on startup
+            pass
 
     # ------------------------------------------------------------------ #
     # Settings dialog                                                      #
@@ -275,7 +315,6 @@ class TrayApp:
 
     def _settings_dialog(self):
         if not HAS_TKINTER:
-            import os, subprocess, sys
             save_config(self._cfg)
             if sys.platform == 'darwin':
                 subprocess.Popen(['open', str(CONFIG_PATH)])
@@ -306,6 +345,18 @@ class TrayApp:
         port_var = tk.StringVar(value=str(self._cfg.get('port', 5000)))
         tk.Entry(win, textvariable=port_var, width=10).grid(row=2, column=1, sticky='w', **pad)
 
+        tk.Label(win, text='Fichiers exclus :').grid(row=3, column=0, sticky='nw', **pad)
+        excl_text = tk.Text(win, width=38, height=4)
+        excl_text.insert('1.0', '\n'.join(self._cfg.get('exclude', [])))
+        excl_text.grid(row=3, column=1, columnspan=2, **pad)
+        tk.Label(win, text='Un pattern par ligne\n(.DS_Store, *.tmp, build/*)').grid(
+            row=4, column=1, sticky='w', padx=12)
+
+        running = self._status != 'stopped'
+        if running:
+            tk.Label(win, text='⚠ Les changements prennent effet au prochain démarrage.',
+                     fg='orange').grid(row=5, column=0, columnspan=3, pady=(0, 4))
+
         def save():
             self._cfg['watch_dir'] = dir_var.get()
             self._cfg['peer']      = peer_var.get().strip()
@@ -313,13 +364,15 @@ class TrayApp:
                 self._cfg['port'] = int(port_var.get())
             except ValueError:
                 pass
+            raw = excl_text.get('1.0', 'end').strip()
+            self._cfg['exclude'] = [l.strip() for l in raw.splitlines() if l.strip()]
             save_config(self._cfg)
             win.destroy()
 
         tk.Button(win, text='Enregistrer', command=save, width=14).grid(
-            row=3, column=1, sticky='e', pady=(6, 12))
+            row=6, column=1, sticky='e', pady=(6, 12))
         tk.Button(win, text='Annuler', command=win.destroy, width=10).grid(
-            row=3, column=2, sticky='w', padx=(0, 12), pady=(6, 12))
+            row=6, column=2, sticky='w', padx=(0, 12), pady=(6, 12))
 
         win.mainloop()
 
@@ -329,6 +382,5 @@ class TrayApp:
 # ------------------------------------------------------------------ #
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s  %(levelname)-8s  %(message)s')
+    _setup_logging()
     TrayApp().run()
