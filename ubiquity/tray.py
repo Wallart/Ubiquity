@@ -81,6 +81,40 @@ def _make_icon(color: str, progress: Optional[int] = None) -> Image.Image:
 
 
 # ------------------------------------------------------------------ #
+# macOS main-thread dispatcher                                         #
+# ------------------------------------------------------------------ #
+# Cocoa requires all NSStatusItem / NSMenu operations to happen on the
+# main thread.  _ui_pump is a background thread, so we need a way to
+# hop over.  performSelectorOnMainThread:withObject:waitUntilDone: is
+# the classic PyObjC-safe mechanism — no blocks, no GCD ctypes needed.
+
+_mt_dispatcher = None
+
+if sys.platform == 'darwin':
+    try:
+        import AppKit as _AppKit
+
+        class _MainThreadDispatcher(_AppKit.NSObject):
+            """Calls a Python callable on the Cocoa main thread."""
+            def call_(self, block):
+                block()
+
+        _mt_dispatcher = _MainThreadDispatcher.alloc().init()
+    except Exception:
+        pass
+
+
+def _run_on_main_thread(func):
+    """Schedule *func* to run on the macOS main thread (no-op elsewhere)."""
+    if _mt_dispatcher is not None:
+        _mt_dispatcher.performSelectorOnMainThread_withObject_waitUntilDone_(
+            'call:', func, False
+        )
+    else:
+        func()
+
+
+# ------------------------------------------------------------------ #
 # Tray application                                                     #
 # ------------------------------------------------------------------ #
 
@@ -313,7 +347,7 @@ class TrayApp:
         if self._transfers:
             progress = int(sum(self._transfers.values()) / len(self._transfers))
 
-        # PIL image creation is thread-safe; compute it here on the background thread.
+        # PIL image creation is thread-safe; do it here on the background thread.
         image = _make_icon(color, progress)
 
         def _update():
@@ -326,13 +360,9 @@ class TrayApp:
                 pass
 
         if sys.platform == 'darwin':
-            # All Cocoa/pystray calls must happen on the main thread.
-            # performBlock_ schedules _update on the next NSRunLoop iteration.
-            try:
-                from Foundation import NSRunLoop
-                NSRunLoop.mainRunLoop().performBlock_(_update)
-            except Exception:
-                _update()
+            # Dispatch to main thread — Cocoa forbids NSStatusItem/NSMenu
+            # operations from background threads (causes duplicate tray icon).
+            _run_on_main_thread(_update)
         else:
             _update()
 
