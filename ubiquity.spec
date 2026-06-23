@@ -75,6 +75,8 @@ hidden_imports = [
     'pystray._darwin',
     'pystray._win32',
     'pystray._xorg',
+    # GCD main-thread dispatch (macOS only)
+    'libdispatch',
     # pyperclip platform helpers
     'pyperclip.handlers',
     # settings dialog

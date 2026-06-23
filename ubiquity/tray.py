@@ -84,34 +84,14 @@ def _make_icon(color: str, progress: Optional[int] = None) -> Image.Image:
 # macOS main-thread dispatcher                                         #
 # ------------------------------------------------------------------ #
 # Cocoa requires all NSStatusItem / NSMenu operations to happen on the
-# main thread.  _ui_pump is a background thread, so we need a way to
-# hop over.  performSelectorOnMainThread:withObject:waitUntilDone: is
-# the classic PyObjC-safe mechanism — no blocks, no GCD ctypes needed.
-
-_mt_dispatcher = None
-
-if sys.platform == 'darwin':
-    try:
-        import AppKit as _AppKit
-
-        class _MainThreadDispatcher(_AppKit.NSObject):
-            """Calls a Python callable on the Cocoa main thread."""
-            def call_(self, block):
-                block()
-
-        _mt_dispatcher = _MainThreadDispatcher.alloc().init()
-    except Exception:
-        pass
-
+# main thread.  _ui_pump is a background thread, so we use GCD to hop
+# over: dispatch_async(dispatch_get_main_queue(), block) schedules the
+# callable on the same serial queue that drives NSApplication's run loop.
 
 def _run_on_main_thread(func):
-    """Schedule *func* to run on the macOS main thread (no-op elsewhere)."""
-    if _mt_dispatcher is not None:
-        _mt_dispatcher.performSelectorOnMainThread_withObject_waitUntilDone_(
-            'call:', func, False
-        )
-    else:
-        func()
+    """Schedule *func* to run on the macOS main thread via GCD."""
+    from libdispatch import dispatch_async, dispatch_get_main_queue
+    dispatch_async(dispatch_get_main_queue(), func)
 
 
 # ------------------------------------------------------------------ #
