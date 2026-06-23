@@ -98,6 +98,7 @@ class TrayApp:
         self._engine_loop: Optional[asyncio.AbstractEventLoop] = None
 
         self._ui_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._stopping = False
 
         self._icon = pystray.Icon(
             'Ubiquity',
@@ -109,7 +110,11 @@ class TrayApp:
     def run(self):
         threading.Thread(target=self._ui_pump, daemon=True, name='ui-pump').start()
         self._start_engine()
-        self._icon.run()
+        try:
+            self._icon.run()
+        except OSError as e:
+            if getattr(e, 'winerror', None) != 1401:
+                raise
 
     # ------------------------------------------------------------------ #
     # Menu factory                                                         #
@@ -185,6 +190,7 @@ class TrayApp:
         self._stop_engine()
 
     def _action_quit(self, icon, item):
+        self._stopping = True
         self._stop_engine()
         icon.stop()
 
@@ -293,6 +299,8 @@ class TrayApp:
                 self._apply_icon()
 
     def _apply_icon(self):
+        if self._stopping:
+            return
         if self._status == 'stopped':
             color = 'grey'
         elif self._status in ('searching', 'error'):
