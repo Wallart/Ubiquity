@@ -8,10 +8,18 @@ Only text is synced; image or other non-text clipboard content is silently ignor
 """
 import asyncio
 import logging
+import shutil
+import sys
 
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL = 0.5  # seconds
+
+if sys.platform == 'linux' and not shutil.which('xclip') and not shutil.which('xsel'):
+    log.warning(
+        'Clipboard sync unavailable: install xclip or xsel '
+        '(e.g. "sudo apt install xclip") to enable it on Linux.'
+    )
 
 
 def _get() -> str:
