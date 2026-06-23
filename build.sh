@@ -20,6 +20,25 @@
 
 set -e
 
+# ── Python auto-detection ─────────────────────────────────────────────
+# Use PYTHON env var if set, otherwise find the first Python that has
+# pystray installed (our main non-stdlib dependency).
+if [[ -z "$PYTHON" ]]; then
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+        if command -v "$candidate" &>/dev/null \
+           && "$candidate" -c "import pystray" 2>/dev/null; then
+            PYTHON="$candidate"
+            break
+        fi
+    done
+    if [[ -z "$PYTHON" ]]; then
+        echo "❌ No Python with pystray found. Run: pip install -r requirements.txt"
+        echo "   Or set PYTHON=/path/to/python3 and re-run."
+        exit 1
+    fi
+fi
+echo "→ Using $PYTHON ($(${PYTHON} --version))"
+
 # ── Cross-compile Linux binary from macOS via Docker ──────────────────
 if [[ "$1" == "--linux" ]]; then
     echo "→ Building Linux binary via Docker…"
@@ -29,8 +48,8 @@ if [[ "$1" == "--linux" ]]; then
     exit 0
 fi
 
-python3.11 -m pip install -q pyinstaller -r requirements.txt
-python3.11 -m PyInstaller ubiquity.spec --clean --noconfirm
+"$PYTHON" -m pip install -q pyinstaller -r requirements.txt
+"$PYTHON" -m PyInstaller ubiquity.spec --clean --noconfirm
 
 if [[ "$(uname)" == "Darwin" ]]; then
     echo "→ Creating Ubiquity.dmg…"
