@@ -333,16 +333,23 @@ class TrayApp:
         def _update():
             if self._stopping:
                 return
+            is_main = threading.current_thread() is threading.main_thread()
+            log.info('tray _update: thread=%s main=%s color=%s',
+                     threading.current_thread().name, is_main, color)
             try:
                 self._icon.icon = image
                 self._icon.update_menu()
             except Exception:
-                pass
+                log.exception('tray _update failed')
 
         if sys.platform == 'darwin':
-            # Dispatch to main thread — Cocoa forbids NSStatusItem/NSMenu
-            # operations from background threads (causes duplicate tray icon).
-            _run_on_main_thread(_update)
+            log.info('tray _apply_icon: dispatching from thread=%s',
+                     threading.current_thread().name)
+            try:
+                _run_on_main_thread(_update)
+            except Exception:
+                log.exception('tray _run_on_main_thread failed — calling directly')
+                _update()
         else:
             _update()
 
