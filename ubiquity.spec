@@ -55,12 +55,14 @@ exe = EXE(
     # No console window — this is a tray app, not a CLI tool.
     console=False,
     onefile=True,
+    icon='assets/ubiquity.ico',
 )
 
 if sys.platform == 'darwin':
     app = BUNDLE(
         exe,
         name='Ubiquity.app',
+        icon='assets/ubiquity.icns',
         bundle_identifier='com.ubiquity.sync',
         info_plist={
             # Hide from Dock — the app lives entirely in the menu bar.
