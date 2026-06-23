@@ -29,8 +29,8 @@ if [[ "$1" == "--linux" ]]; then
     exit 0
 fi
 
-pip install -q -r requirements.txt
-pyinstaller ubiquity.spec --clean --noconfirm
+python3.11 -m pip install -q pyinstaller -r requirements.txt
+python3.11 -m PyInstaller ubiquity.spec --clean --noconfirm
 
 if [[ "$(uname)" == "Darwin" ]]; then
     echo "→ Creating Ubiquity.dmg…"
