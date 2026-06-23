@@ -52,6 +52,35 @@ def setup_logging():
 
 
 # ------------------------------------------------------------------ #
+# macOS startup feedback                                               #
+# ------------------------------------------------------------------ #
+
+def _macos_dock_bounce():
+    """Temporarily show + bounce the Dock icon while the tray initialises."""
+    if sys.platform != 'darwin':
+        return
+    try:
+        import AppKit
+        ns_app = AppKit.NSApplication.sharedApplication()
+        ns_app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+        ns_app.requestUserAttention_(AppKit.NSInformationalRequest)
+
+        def _hide():
+            import time
+            time.sleep(1.0)
+            try:
+                AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+                    AppKit.NSApplicationActivationPolicyAccessory
+                )
+            except Exception:
+                pass
+
+        threading.Thread(target=_hide, daemon=True).start()
+    except Exception:
+        pass
+
+
+# ------------------------------------------------------------------ #
 # Icon drawing                                                         #
 # ------------------------------------------------------------------ #
 
@@ -107,6 +136,7 @@ class TrayApp:
         )
 
     def run(self):
+        _macos_dock_bounce()
         threading.Thread(target=self._ui_pump, daemon=True, name='ui-pump').start()
         self._start_engine()
         self._icon.run()
@@ -215,6 +245,8 @@ class TrayApp:
         if self._engine_thread and self._engine_thread.is_alive():
             return
         Path(self._cfg['watch_dir']).mkdir(parents=True, exist_ok=True)
+        self._status = 'searching'
+        self._ui_queue.put(('status', 'searching', ''))
         self._engine_thread = threading.Thread(
             target=self._run_engine, daemon=True, name='ubiquity-engine',
         )
