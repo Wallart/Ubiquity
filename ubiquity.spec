@@ -96,34 +96,51 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    name='ubiquity',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    # No console window — this is a tray app, not a CLI tool.
-    console=False,
-    # macOS: onedir — files live inside the .app bundle, no temp extraction on launch.
-    # Windows/Linux: onefile — single executable for easy distribution.
-    onefile=sys.platform != 'darwin',
-    icon='assets/ubiquity.ico',
-)
-
 if sys.platform == 'darwin':
-    app = BUNDLE(
+    # ── macOS: onedir inside the .app bundle (no temp extraction = fast startup) ──
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,   # binaries go into COLLECT, not the executable
+        name='ubiquity',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        console=False,
+        icon='assets/ubiquity.ico',
+    )
+    coll = COLLECT(
         exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        name='ubiquity',
+    )
+    app = BUNDLE(
+        coll,
         name='Ubiquity.app',
         icon='assets/ubiquity.icns',
         bundle_identifier='com.ubiquity.sync',
         info_plist={
-            # Hide from Dock — the app lives entirely in the menu bar.
             'LSUIElement': True,
             'NSHighResolutionCapable': True,
             'CFBundleShortVersionString': '1.0',
         },
+    )
+else:
+    # ── Windows / Linux: single executable for easy distribution ──
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        name='ubiquity',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        console=False,
+        onefile=True,
+        icon='assets/ubiquity.ico',
     )
