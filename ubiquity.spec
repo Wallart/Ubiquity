@@ -36,7 +36,19 @@ a = Analysis(
     hiddenimports=hidden_imports,
     hookspath=['hooks'],
     runtime_hooks=[],
-    excludes=['google', 'google.cloud'],
+    excludes=[
+        # Google Cloud namespace — not used, crashes if google-cloud-core absent
+        'google', 'google.cloud',
+        # Data science stack — not used by Ubiquity
+        'numpy', 'pandas', 'scipy', 'matplotlib',
+        'sklearn', 'skimage', 'cv2',
+        'IPython', 'jupyter', 'notebook',
+        # Test frameworks
+        'pytest', 'unittest',
+        # Misc heavy packages unlikely to be needed
+        'xmlrpc', 'email', 'html', 'http.server',
+        'multiprocessing',
+    ],
     cipher=block_cipher,
 )
 
