@@ -108,7 +108,9 @@ exe = EXE(
     upx=True,
     # No console window — this is a tray app, not a CLI tool.
     console=False,
-    onefile=True,
+    # macOS: onedir — files live inside the .app bundle, no temp extraction on launch.
+    # Windows/Linux: onefile — single executable for easy distribution.
+    onefile=sys.platform != 'darwin',
     icon='assets/ubiquity.ico',
 )
 
