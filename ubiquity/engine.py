@@ -60,7 +60,8 @@ class _ReceiveState:
 class SyncEngine:
     def __init__(self, watch_dir: str, mode: str, peer_name: str = None, port: int = 5000,
                  on_status=None, on_transfer=None, sync_filter=None,
-                 on_frame=None, screen_fps: int = 8, screen_quality: int = 50,
+                 on_frame=None, on_share_ended=None,
+                 screen_fps: int = 8, screen_quality: int = 50,
                  screen_monitor: int = 1):
         self._watch_dir = Path(watch_dir).resolve()
         self._mode = mode
@@ -86,6 +87,7 @@ class SyncEngine:
         self._on_status = on_status or (lambda status, peer='': None)
         self._on_transfer = on_transfer or (lambda name, pct, done=False: None)
         self._on_frame = on_frame or (lambda jpeg: None)
+        self._on_share_ended = on_share_ended or (lambda: None)
 
     def request_stop(self):
         """Thread-safe: signal the engine to stop gracefully."""
@@ -297,16 +299,17 @@ class SyncEngine:
 
     def ask_peer_to_share(self, on: bool):
         """Tell the peer to start/stop sharing its screen with us."""
+        self._schedule_ctrl('start' if on else 'stop')
+
+    def _schedule_ctrl(self, action: str):
         if self._loop:
             self._loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(self._send_ctrl(on))
+                lambda: asyncio.ensure_future(self._send_ctrl(action))
             )
 
-    async def _send_ctrl(self, on: bool):
+    async def _send_ctrl(self, action: str):
         if self._transport and self._transport.connected:
-            await self._transport.send(
-                protocol.encode_screen_ctrl('start' if on else 'stop')
-            )
+            await self._transport.send(protocol.encode_screen_ctrl(action))
 
     def _start_capture(self):
         if self._capture_task and not self._capture_task.done():
@@ -321,6 +324,9 @@ class SyncEngine:
             self._capture_task.cancel()
             self._capture_task = None
             log.info('Screen sharing stopped')
+            # Tell the viewing peer we stopped, so it can close its window
+            # instead of freezing on the last frame.
+            asyncio.ensure_future(self._send_ctrl('ended'))
 
     async def _capture_loop(self):
         loop = asyncio.get_running_loop()
@@ -416,11 +422,14 @@ class SyncEngine:
 
         elif msg_type == protocol.MSG_SCREEN_CTRL:
             action = protocol.decode_screen_ctrl(data)
-            log.info(f'Peer requested screen share: {action}')
+            log.info(f'Screen-share control from peer: {action}')
             if action == 'start':
                 self._start_capture()
-            else:
+            elif action == 'stop':
                 self._stop_capture()
+            elif action == 'ended':
+                # The peer we were viewing stopped sharing → close our viewer.
+                self._on_share_ended()
 
     async def _finalise_receive(self, state: '_ReceiveState'):
         meta = state.meta

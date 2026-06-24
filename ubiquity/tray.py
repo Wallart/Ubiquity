@@ -248,6 +248,7 @@ class TrayApp:
             self._engine.start_sharing()
         else:
             self._engine.stop_sharing()
+        self._refresh_menu()
 
     def _action_view_peer(self, icon, item):
         if not self._engine or self._viewer_open:
@@ -312,6 +313,7 @@ class TrayApp:
             on_transfer=self._on_engine_transfer,
             sync_filter=SyncFilter(self._cfg.get('exclude', [])),
             on_frame=self._on_engine_frame,
+            on_share_ended=self._on_share_ended,
             screen_fps=int(self._cfg.get('screen_fps', 8)),
             screen_quality=int(self._cfg.get('screen_quality', 50)),
             screen_monitor=int(self._cfg.get('screen_monitor', 1)),
@@ -368,11 +370,32 @@ class TrayApp:
             pass
         self._viewer_open = True
         self._engine.ask_peer_to_share(True)
+        self._refresh_menu()  # disable "Voir l'écran du pair" while open
         if sys.platform == 'darwin':
             _run_on_main_thread(self._open_viewer_macos)
         else:
             threading.Thread(target=self._viewer_window, daemon=True,
                              name='screen-viewer').start()
+
+    def _on_share_ended(self):
+        """Engine callback: the peer we were viewing stopped sharing."""
+        self._close_viewer()
+
+    def _refresh_menu(self):
+        """Re-evaluate menu item enabled/checked states.
+
+        Windows caches the menu until update_menu() is called; macOS rebuilds
+        it on open via NSMenuDelegate but refreshing is harmless there too.
+        """
+        if self._stopping:
+            return
+        try:
+            if sys.platform == 'darwin':
+                _run_on_main_thread(self._icon.update_menu)
+            else:
+                self._icon.update_menu()
+        except Exception:
+            pass
 
     def _on_viewer_closed(self):
         """macOS delegate callback — the only teardown point on macOS.
@@ -386,6 +409,7 @@ class TrayApp:
         if self._engine:
             self._engine.ask_peer_to_share(False)
         self._set_macos_policy(regular=False)  # hide the Dock icon again
+        self._refresh_menu()  # re-enable "Voir l'écran du pair"
 
     def _set_macos_policy(self, regular: bool):
         import AppKit
@@ -463,13 +487,15 @@ class TrayApp:
         label.pack(fill='both', expand=True)
 
         def on_close():
+            was_open = self._viewer_open
             self._viewer_open = False
-            if self._engine:
+            if was_open and self._engine:
                 self._engine.ask_peer_to_share(False)
             try:
                 win.destroy()
             except Exception:
                 pass
+            self._refresh_menu()  # re-enable "Voir l'écran du pair"
 
         win.protocol('WM_DELETE_WINDOW', on_close)
 
