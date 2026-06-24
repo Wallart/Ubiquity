@@ -20,7 +20,7 @@ from tqdm import tqdm
 # never use multiprocessing, so this removes the only path that touches it.
 tqdm.set_lock(threading.RLock())
 
-from ubiquity import protocol
+from ubiquity import protocol, screenshare
 from ubiquity.clipboard import ClipboardMonitor
 from ubiquity.discovery import DiscoveryServer
 from ubiquity.transport import TCPClient, TCPServer
@@ -59,7 +59,9 @@ class _ReceiveState:
 
 class SyncEngine:
     def __init__(self, watch_dir: str, mode: str, peer_name: str = None, port: int = 5000,
-                 on_status=None, on_transfer=None, sync_filter=None):
+                 on_status=None, on_transfer=None, sync_filter=None,
+                 on_frame=None, screen_fps: int = 8, screen_quality: int = 50,
+                 screen_monitor: int = 1):
         self._watch_dir = Path(watch_dir).resolve()
         self._mode = mode
         self._peer_name = peer_name
@@ -73,9 +75,17 @@ class SyncEngine:
         self._filter = sync_filter
         self._clipboard = ClipboardMonitor(self._on_clipboard_change)
         self._stop_event: Optional[asyncio.Event] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Screen share (view-only MJPEG).
+        self._screen_fps = screen_fps
+        self._screen_quality = screen_quality
+        self._screen_monitor = screen_monitor
+        self._capture_task: Optional[asyncio.Task] = None
+        self._reassembler = screenshare.FrameReassembler(self._on_frame_received)
         # GUI callbacks — called from the asyncio thread, must be thread-safe.
         self._on_status = on_status or (lambda status, peer='': None)
         self._on_transfer = on_transfer or (lambda name, pct, done=False: None)
+        self._on_frame = on_frame or (lambda jpeg: None)
 
     def request_stop(self):
         """Thread-safe: signal the engine to stop gracefully."""
@@ -132,6 +142,7 @@ class SyncEngine:
                     await self._transport.disconnect()
                     watcher.stop()
         finally:
+            self._stop_capture()
             clipboard_task.cancel()
             try:
                 await clipboard_task
@@ -270,6 +281,83 @@ class SyncEngine:
         log.info(f'Sent clipboard ({len(text)} chars)')
 
     # ------------------------------------------------------------------ #
+    # Screen share (view-only MJPEG)                                       #
+    # ------------------------------------------------------------------ #
+    # Public API below is thread-safe: it hops onto the engine's loop via
+    # call_soon_threadsafe so the tray (a different thread) can drive it.
+
+    def start_sharing(self):
+        """Begin capturing and streaming this screen to the peer."""
+        if self._loop:
+            self._loop.call_soon_threadsafe(self._start_capture)
+
+    def stop_sharing(self):
+        if self._loop:
+            self._loop.call_soon_threadsafe(self._stop_capture)
+
+    def ask_peer_to_share(self, on: bool):
+        """Tell the peer to start/stop sharing its screen with us."""
+        if self._loop:
+            self._loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(self._send_ctrl(on))
+            )
+
+    async def _send_ctrl(self, on: bool):
+        if self._transport and self._transport.connected:
+            await self._transport.send(
+                protocol.encode_screen_ctrl('start' if on else 'stop')
+            )
+
+    def _start_capture(self):
+        if self._capture_task and not self._capture_task.done():
+            return
+        if not screenshare.ensure_permission():
+            return  # permission prompt shown; user must grant + relaunch
+        log.info('Screen sharing started')
+        self._capture_task = asyncio.ensure_future(self._capture_loop())
+
+    def _stop_capture(self):
+        if self._capture_task:
+            self._capture_task.cancel()
+            self._capture_task = None
+            log.info('Screen sharing stopped')
+
+    async def _capture_loop(self):
+        loop = asyncio.get_running_loop()
+        interval = 1.0 / max(1, self._screen_fps)
+        frame_id = 0
+        try:
+            while True:
+                t0 = loop.time()
+                if self._transport and self._transport.connected:
+                    jpeg = await loop.run_in_executor(
+                        None, screenshare.grab_jpeg,
+                        self._screen_monitor, self._screen_quality,
+                    )
+                    if jpeg:
+                        await self._send_frame(frame_id, jpeg)
+                        frame_id = (frame_id + 1) & 0xFFFF
+                # Hold the cadence, accounting for capture+send time.
+                await asyncio.sleep(max(0.0, interval - (loop.time() - t0)))
+        except asyncio.CancelledError:
+            pass
+
+    async def _send_frame(self, frame_id: int, jpeg: bytes):
+        # Frame chunks are NOT wrapped in self._send_lock: each transport.send
+        # is atomic on its own, so screen chunks interleave with file chunks and
+        # neither blocks the other for long.
+        size = len(jpeg)
+        total = max(1, (size + protocol.CHUNK_PAYLOAD_SIZE - 1) // protocol.CHUNK_PAYLOAD_SIZE)
+        await self._transport.send(protocol.encode_screen_start(frame_id, size, total))
+        for idx in range(total):
+            chunk = jpeg[idx * protocol.CHUNK_PAYLOAD_SIZE:(idx + 1) * protocol.CHUNK_PAYLOAD_SIZE]
+            await self._transport.send(protocol.encode_screen_chunk(frame_id, idx, chunk))
+
+    def _on_frame_received(self, jpeg: bytes):
+        """Called by FrameReassembler on a complete inbound frame."""
+        self._on_frame(jpeg)
+
+    # ------------------------------------------------------------------ #
     # Inbound: TCP → local disk                                            #
     # ------------------------------------------------------------------ #
 
@@ -317,6 +405,22 @@ class SyncEngine:
             text = protocol.decode_clipboard(data)
             self._clipboard.set(text)
             log.info(f'Received clipboard ({len(text)} chars)')
+
+        elif msg_type == protocol.MSG_SCREEN_START:
+            frame_id, size, total = protocol.decode_screen_start(data)
+            self._reassembler.start(frame_id, size, total)
+
+        elif msg_type == protocol.MSG_SCREEN_CHUNK:
+            frame_id, idx, chunk_data = protocol.decode_screen_chunk(data)
+            self._reassembler.chunk(frame_id, idx, chunk_data)
+
+        elif msg_type == protocol.MSG_SCREEN_CTRL:
+            action = protocol.decode_screen_ctrl(data)
+            log.info(f'Peer requested screen share: {action}')
+            if action == 'start':
+                self._start_capture()
+            else:
+                self._stop_capture()
 
     async def _finalise_receive(self, state: '_ReceiveState'):
         meta = state.meta

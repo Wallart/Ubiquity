@@ -26,6 +26,10 @@ DEFAULTS: dict = {
         '*.tmp',
         '~$*',
     ],
+    # Screen share (view-only MJPEG)
+    'screen_fps':     8,   # frames per second
+    'screen_quality': 50,  # JPEG quality (1-95)
+    'screen_monitor': 1,   # mss monitor index (1 = primary, 0 = all monitors)
 }
 
 

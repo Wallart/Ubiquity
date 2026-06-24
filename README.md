@@ -6,6 +6,7 @@ Synchronisation bidirectionnelle de fichiers et de presse-papiers entre plusieur
 
 - **Sync de fichiers** en temps réel, bidirectionnelle, last-write-wins
 - **Sync du presse-papiers** (texte) entre les machines connectées
+- **Partage d'écran** (vue seule, MJPEG) entre les deux pairs
 - **Auto-découverte** du serveur par broadcast UDP — pas besoin de connaître l'IP à l'avance
 - **Icône tray** avec statut en couleur, transferts en cours, paramètres
 - **Filtrage** des fichiers à exclure (`.DS_Store`, `*.tmp`, etc.)
@@ -30,7 +31,7 @@ Python 3.11+
 pip install -r requirements.txt
 ```
 
-Dépendances : `watchdog`, `tqdm`, `pystray`, `Pillow`, `pyperclip`
+Dépendances : `watchdog`, `tqdm`, `pystray`, `Pillow`, `pyperclip`, `mss`
 
 **Linux uniquement** — sync presse-papiers :
 ```bash
@@ -48,6 +49,7 @@ python ubiquity.py
 L'application démarre dans la barre de menu et lance la synchronisation automatiquement. Clic sur l'icône pour :
 - Voir l'état de la connexion
 - Changer de mode (serveur / client)
+- **Partager mon écran** / **Voir l'écran du pair** (quand connecté)
 - Accéder aux paramètres
 - Ouvrir le dossier synchronisé
 - Consulter les logs
@@ -60,6 +62,23 @@ L'application démarre dans la barre de menu et lance la synchronisation automat
 | Rouge | En attente d'un pair |
 | Orange | Transfert en cours |
 | Vert | Connecté et synchronisé |
+
+### Partage d'écran (vue seule)
+
+Une fois deux pairs connectés (icône verte) :
+
+- **Voir l'écran du pair** ouvre une fenêtre qui affiche l'écran de l'autre machine et lui demande automatiquement de diffuser.
+- **Partager mon écran** diffuse votre écran sans attendre de demande.
+
+Le flux est du MJPEG (frames JPEG) sur la connexion TCP existante, en vue seule (pas de contrôle à distance). Réglages dans `config.json` :
+
+| Clé | Description | Défaut |
+|-----|-------------|--------|
+| `screen_fps` | Images par seconde | `8` |
+| `screen_quality` | Qualité JPEG (1–95) | `50` |
+| `screen_monitor` | Écran capturé (`1` = principal, `0` = tous) | `1` |
+
+> **macOS** : la première diffusion déclenche la demande d'autorisation *Enregistrement de l'écran*. Activez Ubiquity dans Réglages Système → Confidentialité et sécurité → Enregistrement de l'écran, puis relancez l'application.
 
 ### Mode headless (sans interface)
 

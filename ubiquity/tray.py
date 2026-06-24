@@ -4,6 +4,7 @@ Ubiquity — system tray application.
 The engine runs in a background asyncio thread; the tray lives on the main thread.
 """
 import asyncio
+import io
 import logging
 import logging.handlers
 import os
@@ -94,6 +95,22 @@ def _run_on_main_thread(func):
     dispatch_async(dispatch_get_main_queue(), func)
 
 
+# NSWindow close detection needs a delegate. We attach a Python callback as an
+# attribute, exactly as pystray does for its IconDelegate.
+_WindowDelegate = None
+if sys.platform == 'darwin':
+    try:
+        from Foundation import NSObject as _NSObject
+
+        class _WindowDelegate(_NSObject):
+            def windowWillClose_(self, notification):
+                cb = getattr(self, 'on_close', None)
+                if cb:
+                    cb()
+    except Exception:
+        _WindowDelegate = None
+
+
 # ------------------------------------------------------------------ #
 # Tray application                                                     #
 # ------------------------------------------------------------------ #
@@ -113,6 +130,14 @@ class TrayApp:
 
         self._ui_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._stopping = False
+
+        # Screen share
+        self._sharing = False
+        self._viewer_open = False
+        self._viewer_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._ns_window = None       # macOS Cocoa viewer window
+        self._ns_imageview = None
+        self._ns_delegate = None
 
         self._icon = pystray.Icon(
             'Ubiquity',
@@ -174,6 +199,18 @@ class TrayApp:
                 enabled=not running,
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                'Partager mon écran',
+                self._action_toggle_share,
+                checked=lambda _: self._sharing,
+                enabled=self._status == 'connected',
+            ),
+            pystray.MenuItem(
+                'Voir l’écran du pair',
+                self._action_view_peer,
+                enabled=self._status == 'connected' and not self._viewer_open,
+            ),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem('Ouvrir le dossier', self._action_open_folder),
             pystray.MenuItem('Paramètres…',        self._action_settings),
             pystray.MenuItem('Voir les logs',      self._action_open_logs),
@@ -202,6 +239,20 @@ class TrayApp:
 
     def _action_stop(self, icon, item):
         self._stop_engine()
+
+    def _action_toggle_share(self, icon, item):
+        if not self._engine:
+            return
+        self._sharing = not self._sharing
+        if self._sharing:
+            self._engine.start_sharing()
+        else:
+            self._engine.stop_sharing()
+
+    def _action_view_peer(self, icon, item):
+        if not self._engine or self._viewer_open:
+            return
+        self._open_viewer()
 
     def _action_quit(self, icon, item):
         self._stopping = True
@@ -260,6 +311,10 @@ class TrayApp:
             on_status=self._on_engine_status,
             on_transfer=self._on_engine_transfer,
             sync_filter=SyncFilter(self._cfg.get('exclude', [])),
+            on_frame=self._on_engine_frame,
+            screen_fps=int(self._cfg.get('screen_fps', 8)),
+            screen_quality=int(self._cfg.get('screen_quality', 50)),
+            screen_monitor=int(self._cfg.get('screen_monitor', 1)),
         )
         try:
             loop.run_until_complete(self._engine.run())
@@ -282,6 +337,167 @@ class TrayApp:
     def _on_engine_transfer(self, name: str, pct: int, done: bool = False):
         self._ui_queue.put(('transfer', name, pct, done))
 
+    def _on_engine_frame(self, jpeg: bytes):
+        # Called from the engine's asyncio thread; hand off to the viewer window.
+        if not self._viewer_open:
+            return
+        if sys.platform == 'darwin':
+            _run_on_main_thread(lambda: self._update_frame_macos(jpeg))
+        else:
+            self._viewer_queue.put(jpeg)
+
+    # ------------------------------------------------------------------ #
+    # Screen viewer window                                                 #
+    # ------------------------------------------------------------------ #
+
+    def _open_viewer(self):
+        # macOS uses a native Cocoa window (tkinter/tcl is painful to bundle and
+        # often unavailable); other platforms use tkinter.
+        if sys.platform == 'darwin':
+            if _WindowDelegate is None:
+                log.warning('Cannot open screen viewer: AppKit unavailable')
+                return
+        elif not HAS_TKINTER:
+            log.warning('Cannot open screen viewer: tkinter unavailable')
+            return
+        # Drain any stale frames from a previous session.
+        try:
+            while True:
+                self._viewer_queue.get_nowait()
+        except queue.Empty:
+            pass
+        self._viewer_open = True
+        self._engine.ask_peer_to_share(True)
+        if sys.platform == 'darwin':
+            _run_on_main_thread(self._open_viewer_macos)
+        else:
+            threading.Thread(target=self._viewer_window, daemon=True,
+                             name='screen-viewer').start()
+
+    def _on_viewer_closed(self):
+        """macOS delegate callback — the only teardown point on macOS.
+
+        Fires both when the user clicks ✕ and when we call win.close()
+        programmatically. Runs on the main thread.
+        """
+        if not self._viewer_open:
+            return
+        self._viewer_open = False
+        if self._engine:
+            self._engine.ask_peer_to_share(False)
+        self._set_macos_policy(regular=False)  # hide the Dock icon again
+
+    def _set_macos_policy(self, regular: bool):
+        import AppKit
+        AppKit.NSApp.setActivationPolicy_(
+            AppKit.NSApplicationActivationPolicyRegular if regular
+            else AppKit.NSApplicationActivationPolicyAccessory
+        )
+
+    def _close_viewer(self):
+        """Actively close the viewer (peer lost / engine stopped)."""
+        if not self._viewer_open:
+            return
+        if sys.platform == 'darwin':
+            win = self._ns_window
+            if win is not None:
+                _run_on_main_thread(lambda: win.close())  # fires _on_viewer_closed
+            else:
+                self._viewer_open = False
+        else:
+            # The tkinter viewer closes itself via its poll loop on this flag.
+            self._viewer_open = False
+
+    # ---- macOS native viewer (Cocoa) ---------------------------------- #
+
+    def _open_viewer_macos(self):
+        # Runs on the main thread (dispatched). Build an NSWindow + NSImageView.
+        import AppKit
+        rect = AppKit.NSMakeRect(200, 200, 960, 600)
+        style = (AppKit.NSWindowStyleMaskTitled
+                 | AppKit.NSWindowStyleMaskClosable
+                 | AppKit.NSWindowStyleMaskResizable
+                 | AppKit.NSWindowStyleMaskMiniaturizable)
+        win = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            rect, style, AppKit.NSBackingStoreBuffered, False)
+        win.setTitle_('Ubiquity — Écran du pair')
+        win.setReleasedWhenClosed_(False)
+
+        iv = AppKit.NSImageView.alloc().initWithFrame_(rect)
+        iv.setImageScaling_(AppKit.NSImageScaleProportionallyUpOrDown)
+        win.setContentView_(iv)
+
+        delegate = _WindowDelegate.alloc().init()
+        delegate.on_close = self._on_viewer_closed
+        win.setDelegate_(delegate)
+
+        self._ns_window = win
+        self._ns_imageview = iv
+        self._ns_delegate = delegate
+
+        # Become a regular app while the window is up, so it appears reliably
+        # and can take focus (we revert to accessory/LSUIElement on close).
+        self._set_macos_policy(regular=True)
+        win.makeKeyAndOrderFront_(None)
+        AppKit.NSApp.activateIgnoringOtherApps_(True)
+
+    def _update_frame_macos(self, jpeg: bytes):
+        # Runs on the main thread (dispatched). Swap the NSImageView's image.
+        if not self._viewer_open or self._ns_imageview is None:
+            return
+        import AppKit
+        from Foundation import NSData
+        data = NSData.dataWithBytes_length_(jpeg, len(jpeg))
+        image = AppKit.NSImage.alloc().initWithData_(data)
+        if image is not None:
+            self._ns_imageview.setImage_(image)
+
+    def _viewer_window(self):
+        from PIL import ImageTk
+        MAX_W, MAX_H = 1280, 800
+
+        win = tk.Tk()
+        win.title('Ubiquity — Écran du pair')
+        win.configure(bg='black')
+        label = tk.Label(win, bg='black', text='En attente de l’image…', fg='grey')
+        label.pack(fill='both', expand=True)
+
+        def on_close():
+            self._viewer_open = False
+            if self._engine:
+                self._engine.ask_peer_to_share(False)
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        win.protocol('WM_DELETE_WINDOW', on_close)
+
+        def poll():
+            if not self._viewer_open or self._stopping:
+                on_close()
+                return
+            # Drain to the most recent frame; drop the stale ones.
+            jpeg = None
+            try:
+                while True:
+                    jpeg = self._viewer_queue.get_nowait()
+            except queue.Empty:
+                pass
+            if jpeg:
+                try:
+                    img = Image.open(io.BytesIO(jpeg))
+                    img.thumbnail((MAX_W, MAX_H))
+                    photo = ImageTk.PhotoImage(img)
+                    label.config(image=photo, text='')
+                    label.image = photo  # keep a reference, else GC clears it
+                except Exception:
+                    log.exception('Failed to render screen frame')
+            win.after(40, poll)
+
+        win.after(40, poll)
+        win.mainloop()
+
     # ------------------------------------------------------------------ #
     # UI pump — drains queue, updates pystray from a daemon thread         #
     # ------------------------------------------------------------------ #
@@ -303,6 +519,10 @@ class TrayApp:
                     self._status    = msg[1]
                     self._peer_addr = msg[2]
                 self._transfers.clear()
+                # Lost the peer / stopped: drop any screen-share state.
+                if self._status in ('stopped', 'searching', 'error'):
+                    self._sharing = False
+                    self._close_viewer()
                 self._apply_icon()
             elif kind == 'transfer':
                 _, name, pct, done = msg

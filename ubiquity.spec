@@ -79,9 +79,15 @@ hidden_imports = [
     'libdispatch',
     # pyperclip platform helpers
     'pyperclip.handlers',
-    # settings dialog
+    # settings dialog + screen viewer
     'tkinter',
     'tkinter.filedialog',
+    'PIL.ImageTk',
+    # screen capture backends (loaded at runtime via ctypes/importlib)
+    'mss',
+    'mss.darwin',
+    'mss.windows',
+    'mss.linux',
 ]
 
 a = Analysis(
