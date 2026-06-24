@@ -7,10 +7,18 @@ Echo prevention: files written locally are ignored by the watcher for 1 second.
 import asyncio
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
 from tqdm import tqdm
+
+# tqdm lazily creates a multiprocessing.RLock for its progress bars.  Inside a
+# PyInstaller bundle sys.executable IS the app, so spawning multiprocessing's
+# resource_tracker re-executes the whole bundle — launching a second tray icon
+# and relaunching the app on quit.  Force a plain threading lock instead: we
+# never use multiprocessing, so this removes the only path that touches it.
+tqdm.set_lock(threading.RLock())
 
 from ubiquity import protocol
 from ubiquity.clipboard import ClipboardMonitor
